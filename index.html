@@ -316,7 +316,7 @@ async function connectDb() {
     const snap = await DOCREF.get();
     if (snap.exists) {
       const st = JSON.parse(snap.data().state || "null");
-      if (st && st.v === 1) { S = st; if (!S.plan || S.plan.ver !== 3) S.plan = buildPlan(S.profile); store.set("plusloin.state", S); render(); }
+      if (st && st.v === 1) { S = st; if (!S.plan || S.plan.ver !== 3) { S.plan = buildPlan(S.profile); UI.planWeek = null; } store.set("plusloin.state", S); render(); }
     } else { persist(); }
   } catch (e) { /* sauvegarde locale seulement */ }
 }
@@ -709,7 +709,7 @@ function renderNav() {
   $("#profile-label").textContent = S.profile.prenom || "Profil";
 }
 function render() {
-  if (!S.plan || S.plan.ver !== 3) S.plan = buildPlan(S.profile);
+  if (!S.plan || S.plan.ver !== 3) { S.plan = buildPlan(S.profile); UI.planWeek = null; }
   renderNav();
   const v = $("#view");
   document.body.classList.toggle("is-home", UI.view === "today");
@@ -813,6 +813,7 @@ function vPlan() {
     <div class="row between"><button class="iconbtn" type="button" data-act="wprev" ${w.i === 0 ? "disabled" : ""} aria-label="Semaine précédente">‹</button>
       <div class="stack" style="gap:0;text-align:center;flex:1"><span class="eyebrow">Semaine ${w.i + 1} · ${w.phase}${w.rec ? " · allégée" : ""}</span><b>${parse(w.start).toLocaleDateString("fr-FR", { day: "numeric", month: "short" })} – ${parse(addDays(w.start, 6)).toLocaleDateString("fr-FR", { day: "numeric", month: "short" })}</b></div>
       <button class="iconbtn" type="button" data-act="wnext" ${w.i === weeks.length - 1 ? "disabled" : ""} aria-label="Semaine suivante">›</button></div>
+    ${cur && w.i !== cur.i ? `<button class="btn ghost block" type="button" data-act="wcur" style="min-height:36px">← Revenir à cette semaine (semaine ${cur.i + 1})</button>` : ""}
     <div class="grid3"><div class="stat"><span class="v num">${w.km}<small>km</small></span><span class="l">Volume visé</span></div><div class="stat"><span class="v num">${w.dplus}<small>m</small></span><span class="l">Dénivelé +</span></div><div class="stat"><span class="v num">${fmtMin(tot)}</span><span class="l">Temps total</span></div></div>
     <div class="why"><b>${w.phase}.</b> ${PHASE_WHY[w.phase]}${w.rec ? " Semaine allégée : on assimile le travail des 3 semaines précédentes." : ""}</div>
     <div class="stack">${days.map(({ d, s }) => s ? `<button type="button" class="logitem" data-day="${d}" data-goto="session"><span class="sc" style="background:${TYPE_META[s.type].c};color:${s.type === "repos" ? "var(--ink-3)" : "#fff"};font-size:13px">${JOURS[(parse(d).getDay() + 6) % 7]}</span><span style="flex:1;min-width:0"><b>${esc(s.title)}</b><br><span class="small muted">${[s.min ? fmtMin(s.min) : "", s.km ? s.km + " km" : "", s.dplus ? s.dplus + " m D+" : "", s.zone ? "Z" + s.zone : ""].filter(Boolean).join(" · ") || "Récupération"}${s.note ? " · ajustée" : ""}</span></span>${isDone(d) ? '<span class="chip good">✓</span>' : doneMark(d) === "non" ? '<span class="chip">✗</span>' : ""}</button>` : "").join("")}</div>
@@ -1617,6 +1618,7 @@ document.addEventListener("click", e => {
   else if (a === "mark-done" || a === "mark-miss") { S.done = S.done || {}; S.done[t.dataset.date] = a === "mark-done" ? "fait" : "non"; persist(); render(); toast(a === "mark-done" ? "Bravo, séance validée" : "Séance notée comme non réalisée"); }
   else if (a === "mark-undo") { if (S.done) delete S.done[t.dataset.date]; persist(); render(); }
   else if (a === "wprev") { UI.planWeek--; render(); }
+  else if (a === "wcur") { UI.planWeek = null; render(); }
   else if (a === "wnext") { UI.planWeek++; render(); }
   else if (a === "ai-week") aiWeek(t);
   else if (a === "del-log") { const id = t.dataset.id; S.logs = S.logs.filter(l => l.id !== id); Object.keys(S.overrides).forEach(d => { if (S.overrides[d].src === id) delete S.overrides[d]; }); if (S.adapt?.src === id) S.adapt = null; persist(); closeSheet(); render(); toast("Analyse supprimée"); }
