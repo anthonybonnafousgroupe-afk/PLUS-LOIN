@@ -840,7 +840,7 @@ function scoreColor(n) { return n >= 8 ? "var(--good)" : n >= 6 ? "var(--warn)" 
 function vLog() {
   const logs = S.logs.slice().sort((a, b) => b.date.localeCompare(a.date));
   return `<div class="card">
-    ${S.strava?.refresh ? `<div class="row between" style="gap:10px;flex-wrap:wrap"><span class="chip good">Strava connecté${S.strava.athlete ? " · " + esc(S.strava.athlete) : ""}</span><button class="btn secondary" id="strava-sync" type="button" data-act="strava-sync" style="min-height:38px;padding:6px 14px">↻ Synchroniser</button></div><p class="small muted">Tes nouvelles sorties Strava sont importées et analysées automatiquement à l'ouverture de l'appli.</p>` : `<div class="banner"><span><b>Import automatique.</b> Connecte Strava dans ton profil : tes sorties arriveront toutes seules, sans fichier à télécharger.</span><button class="btn" type="button" data-nav="profile" style="min-height:36px;padding:6px 12px">Connecter</button></div>`}
+    ${(S.profile.icuKey || "").trim() ? `<div class="row between" style="gap:10px;flex-wrap:wrap"><span class="chip good">Montre connectée (intervals.icu)</span><button class="btn secondary" id="icu-sync" type="button" data-act="icu-sync" style="min-height:38px;padding:6px 14px">↻ Synchroniser</button></div><p class="small muted">Tes nouvelles sorties arrivent toutes seules à l'ouverture de l'appli.</p>` : S.strava?.refresh ? `<div class="row between" style="gap:10px;flex-wrap:wrap"><span class="chip good">Strava connecté${S.strava.athlete ? " · " + esc(S.strava.athlete) : ""}</span><button class="btn secondary" id="strava-sync" type="button" data-act="strava-sync" style="min-height:38px;padding:6px 14px">↻ Synchroniser</button></div><p class="small muted">Tes nouvelles sorties Strava sont importées et analysées automatiquement à l'ouverture de l'appli.</p>` : `<div class="banner"><span><b>Import automatique.</b> Relie ta montre (gratuit, via intervals.icu) dans ton profil : tes sorties arriveront toutes seules, sans fichier à télécharger.</span><button class="btn" type="button" data-nav="profile" style="min-height:36px;padding:6px 12px">Connecter</button></div>`}
     <span class="eyebrow">Analyse de séance</span><h2>Importe ta sortie</h2>
     <p class="muted small">Le coach lit tes données (distance, allure, FC, dénivelé), note la séance, explique tes points forts et tes axes de progrès, puis adapte tes prochaines séances.</p>
     <div class="drop" id="drop-act"><b>Fichier d'activité (recommandé)</b><span class="small muted">GPX, TCX ou FIT exporté depuis Strava, Garmin, Coros ou Suunto. Données exactes, splits et temps par zone.</span><label class="btn" style="min-height:40px">Choisir un fichier<input type="file" id="actfile" accept=".gpx,.tcx,.fit,.gz,application/gpx+xml,application/octet-stream" hidden></label></div>
@@ -957,7 +957,10 @@ function vProfile() {
     <div class="card"><h3>Objectif</h3>
       ${f("course", "Nom de la course", "text")}
       <div class="grid3">${f("distance", "Distance (km)", "number", 'min="10" max="200"')}${f("dplus", "D+ (m)", "number", 'min="0" max="12000" step="50"')}${f("raceDate", "Date", "date")}</div></div>
-    <div class="card"><h3>Strava</h3>
+    <div class="card"><h3>Synchro de ta montre (gratuit)</h3>
+      <p class="small muted">Crée un compte gratuit sur intervals.icu et relie ta montre (Garmin, Coros, Suunto, Polar). Puis dans intervals.icu › Settings › Developer Settings, copie ta clé API ici.</p>
+      ${f("icuKey", "Clé API intervals.icu", "password", 'autocomplete="off" placeholder="Colle ta clé ici"', "Elle reste sur cet appareil.")}</div>
+    <div class="card"><h3>Strava (abonnés)</h3>
       <p class="small muted">Crée ton application sur strava.com/settings/api (domaine de rappel : ${esc(location.hostname || "ton site")}), puis colle ses identifiants ici.</p>
       <div class="grid2">${f("stravaId", "Client ID", "text", 'autocomplete="off" inputmode="numeric"')}${f("stravaSecret", "Client Secret", "password", 'autocomplete="off"')}</div>
       ${S.strava?.refresh ? `<div class="row between"><span class="chip good">Connecté${S.strava.athlete ? " · " + esc(S.strava.athlete) : ""}</span><button class="btn ghost" type="button" data-act="strava-off" style="min-height:36px">Déconnecter</button></div>` : `<button class="btn secondary block" type="button" data-act="strava-connect">Connecter Strava</button>`}</div>
@@ -1513,6 +1516,42 @@ async function stravaCallback() {
   try { await stravaToken({ code: q.get("code"), grant_type: "authorization_code" }); S.strava.since = Math.floor(Date.now() / 1000) - 7 * 86400; persist(); toast("Strava connecté !"); go("log"); stravaSync(true); }
   catch (e) { toast(e.status === 400 || e.status === 401 ? "Strava a refusé la connexion : vérifie le Client ID et le Secret." : "Connexion Strava impossible pour l'instant."); }
 }
+/* ============ intervals.icu : synchro automatique (gratuit, relié à Garmin/Coros/Suunto/Polar) ============ */
+const ICU_TYPES = ["Run", "TrailRun", "VirtualRun", "Walk", "Hike"];
+async function icuFetch(path, bin) {
+  const key = (S.profile.icuKey || "").trim();
+  const r = await fetch("https://intervals.icu/api/v1" + path, { headers: { Authorization: "Basic " + btoa("API_KEY:" + key) } });
+  if (!r.ok) { const e = new Error("icu"); e.status = r.status; throw e; }
+  return bin ? r.arrayBuffer() : r.json();
+}
+let ICU_SYNCING = false;
+async function icuSync(manual) {
+  if (ICU_SYNCING || !(S.profile.icuKey || "").trim()) return;
+  S.icu = S.icu || {};
+  if (!manual && S.icu.last && Date.now() - S.icu.last < 10 * 60 * 1000) return;
+  ICU_SYNCING = true; const btn = $("#icu-sync"); if (btn) btn.innerHTML = `<span class="spinner"></span>Synchronisation…`;
+  let n = 0;
+  try {
+    const oldest = S.icu.since || addDays(TODAY, -7);
+    const list = await icuFetch(`/athlete/0/activities?oldest=${oldest}&newest=${addDays(TODAY, 1)}`);
+    const todo = list.filter(a => ICU_TYPES.includes(a.type) && !S.logs.some(l => l.icuId === a.id)).sort((a, b) => String(a.start_date_local).localeCompare(String(b.start_date_local)));
+    for (const a of todo) {
+      let act = null;
+      try { act = parseFIT(await icuFetch(`/activity/${a.id}/fit-file`, true)); }
+      catch (e) { try { act = await readActivity(new File([await icuFetch(`/activity/${a.id}/file`, true)], "a.fit.gz")); } catch (e2) { act = null; } }
+      if (!act) continue;
+      let A; try { A = summarize(act); } catch (e) { continue; }
+      A.date = String(a.start_date_local).slice(0, 10);
+      const log = await analyzeFile(null, { A, label: `${a.name || "Sortie"} (montre)` });
+      if (log) { log.icuId = a.id; log.source = "montre"; } n++;
+    }
+    S.icu.last = Date.now(); S.icu.ok = true; S.icu.since = addDays(TODAY, -1);
+    persist();
+    if (n || manual) toast(n ? `${n} sortie${n > 1 ? "s" : ""} importée${n > 1 ? "s" : ""} depuis ta montre` : "Aucune nouvelle sortie");
+  } catch (e) {
+    if (manual) toast(e.status === 401 || e.status === 403 ? "Clé intervals.icu refusée : vérifie-la dans ton profil." : inFrame() ? "Dans Claude, la synchro est bloquée : utilise le site sur ton téléphone." : "Synchro impossible (connexion ?).");
+  } finally { ICU_SYNCING = false; render(); }
+}
 let SYNCING = false;
 async function stravaSync(manual) {
   if (SYNCING || !S.strava?.refresh) return;
@@ -1828,6 +1867,7 @@ document.addEventListener("click", e => {
   else if (a === "start-run") startRun(t.dataset.date);
   else if (a === "strava-connect") stravaConnect();
   else if (a === "strava-sync") stravaSync(true);
+  else if (a === "icu-sync") icuSync(true);
   else if (a === "strava-off") { S.strava = null; persist(); render(); toast("Strava déconnecté"); }
   else if (a === "route-again") { ROUTE.seed++; startRun(ROUTE.date, true); }
   else if (a === "route-gpx") shareGpx();
@@ -1866,7 +1906,7 @@ document.addEventListener("submit", e => {
       toast(`${lab} : ${bad.validationMessage || "valeur incorrecte"}`); return;
     }
     const P = S.profile; const num = ["age", "poids", "taille", "vma", "fcRepos", "fcMax", "kmSemaine", "seances", "distance", "dplus"];
-    ["prenom", "ville", "sexe", "niveau", "course", "raceDate", "orsKey", "terrain", "stravaId", "stravaSecret", ...num].forEach(k => { const el = $("#p-" + k); if (el) P[k] = num.includes(k) ? +el.value : el.value.trim(); });
+    ["prenom", "ville", "sexe", "niveau", "course", "raceDate", "orsKey", "terrain", "stravaId", "stravaSecret", "icuKey", ...num].forEach(k => { const el = $("#p-" + k); if (el) P[k] = num.includes(k) ? +el.value : el.value.trim(); });
     if (+P.fcMax <= +P.fcRepos) { toast("La FC max doit être supérieure à la FC de repos."); return; }
     if (!P.raceDate || P.raceDate <= TODAY) { toast("Choisis une date de course dans le futur."); return; }
     P.example = false; S.logs = S.logs.filter(l => !l.example); S.mcShift = 0; S.plan = buildPlan(P); S.overrides = {}; S.adapt = null; UI.planWeek = null;
@@ -1879,7 +1919,8 @@ render();
 requestAnimationFrame(animLoop);
 connectAI();
 stravaCallback().then(() => stravaSync(false));
-document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") stravaSync(false); });
+icuSync(false);
+document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") { stravaSync(false); icuSync(false); } });
 connectDb();
 </script>
 
