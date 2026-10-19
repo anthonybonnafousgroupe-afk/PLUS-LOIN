@@ -1619,6 +1619,22 @@ document.addEventListener("click", e => {
   else if (a === "del-log") { const id = t.dataset.id; S.logs = S.logs.filter(l => l.id !== id); Object.keys(S.overrides).forEach(d => { if (S.overrides[d].src === id) delete S.overrides[d]; }); if (S.adapt?.src === id) S.adapt = null; persist(); closeSheet(); render(); toast("Analyse supprimée"); }
 });
 $("#btn-profile").addEventListener("click", () => go("profile"));
+// Dans Claude, la page tourne dans un cadre qui bloque l'envoi natif des formulaires :
+// on déclenche nous-mêmes l'événement "submit" (bouton ou touche Entrée).
+function fireSubmit(form) {
+  if (!form.noValidate && !form.reportValidity()) return;
+  form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+}
+document.addEventListener("click", e => {
+  const b = e.target.closest('form button[type="submit"], form button:not([type])');
+  if (!b) return;
+  e.preventDefault(); fireSubmit(b.form);
+}, true);
+document.addEventListener("keydown", e => {
+  if (e.key !== "Enter" || e.isComposing) return;
+  const el = e.target; if (!el.form || el.tagName !== "INPUT") return;
+  e.preventDefault(); fireSubmit(el.form);
+}, true);
 document.addEventListener("submit", e => {
   if (e.target.id === "profile-form") {
     e.preventDefault();
