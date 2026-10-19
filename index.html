@@ -312,7 +312,7 @@ async function connectDb() {
     const snap = await DOCREF.get();
     if (snap.exists) {
       const st = JSON.parse(snap.data().state || "null");
-      if (st && st.v === 1) { S = st; store.set("plusloin.state", S); if (!S.plan) S.plan = buildPlan(S.profile); render(); }
+      if (st && st.v === 1) { S = st; if (!S.plan || S.plan.ver !== 2) S.plan = buildPlan(S.profile); store.set("plusloin.state", S); render(); }
     } else { persist(); }
   } catch (e) { /* sauvegarde locale seulement */ }
 }
@@ -337,12 +337,17 @@ function buildPlan(P) {
   const start = mondayOf(TODAY);
   const raceMon = mondayOf(P.raceDate);
   const nW = clamp(Math.floor(daysBetween(start, raceMon) / 7) + 1, 4, 40);
-  const peakLvl = { debutant: 55, intermediaire: 75, confirme: 95 }[P.niveau] || 70;
-  const k0 = clamp(+P.kmSemaine || 25, 10, 140);
+  const lvl = P.niveau || "intermediaire";
+  const peakLvl = { novice: 40, debutant: 55, intermediaire: 75, confirme: 95 }[lvl] || 70;
+  const kMin = { novice: 6, debutant: 10 }[lvl] || 15;
+  const k0 = clamp(+P.kmSemaine || 0, kMin, lvl === "novice" ? 10 : 140);
   const peak = Math.max(k0 * 1.05, Math.min(peakLvl, k0 * 2.2));
   const taper = nW >= 10 ? 2 : 1;
   const build = nW - taper;
-  const nBase = Math.max(1, Math.round(build * 0.35)), nDev = Math.max(1, Math.round(build * 0.35));
+  const baseShare = { novice: 0.5, debutant: 0.45 }[lvl] || 0.35;
+  const nBase = Math.max(1, Math.round(build * baseShare)), nDev = Math.max(1, Math.round(build * 0.3));
+  // Hausse du volume plafonnée à ~10 % par semaine (règle de prudence)
+  let lastBuild = k0, maxBuild = k0;
   const ratio = (P.dplus || 0) / (P.distance || 80);
   const weeks = [];
   for (let i = 0; i < nW; i++) {
@@ -352,47 +357,79 @@ function buildPlan(P) {
       phase = i < nBase ? "Base" : i < nBase + nDev ? "Développement" : "Spécifique";
       const u = build > 1 ? i / (build - 1) : 1;
       km = k0 + (peak - k0) * Math.pow(u, 0.9);
-      if ((i + 1) % 4 === 0 && i < build - 1) { rec = true; km *= 0.7; }
-      dp = km * ratio * (0.3 + 0.7 * u) * (rec ? 0.7 : 1);
-    } else if (i < nW - 1) { phase = "Affûtage"; km = peak * 0.6; dp = km * ratio * 0.6; }
-    else { phase = "Course"; km = peak * 0.3; dp = 0; }
+      km = Math.min(km, i === 0 ? k0 : lastBuild * 1.1 + 1);
+      if ((i + 1) % 4 === 0 && i < build - 1) { rec = true; km = lastBuild * 0.7; }
+      else { lastBuild = km; maxBuild = Math.max(maxBuild, km); }
+      dp = lvl === "novice" && mcStep(i) <= 7 ? 0 : km * ratio * (0.3 + 0.7 * u) * (rec ? 0.7 : 1);
+    } else if (i < nW - 1) { phase = "Affûtage"; km = maxBuild * 0.6; dp = km * ratio * 0.6; }
+    else { phase = "Course"; km = maxBuild * 0.3; dp = 0; }
     weeks.push({ i, start: ws, phase, km: Math.round(km), dplus: Math.round(dp / 10) * 10, rec });
   }
-  return { start, raceDate: P.raceDate, weeks, created: TODAY };
+  return { start, raceDate: P.raceDate, weeks, created: TODAY, ver: 2, lvl };
 }
 function weekOf(date) {
   if (!S.plan) return null;
   const i = Math.floor(daysBetween(S.plan.start, date) / 7);
   return S.plan.weeks[i] || null;
 }
-function pattern(w, n) {
-  if (w.phase === "Course") return ["repos", "affutage", "repos", "ef", "repos", "recup", "repos"];
+// Marche-course : étape atteinte en semaine i (les semaines allégées répètent l'étape précédente)
+const mcStep = i => i - Math.floor((i + 1) / 4);
+const WALKRUN = [[1, 2, 8], [2, 2, 6], [3, 2, 5], [4, 2, 4], [6, 2, 3], [8, 2, 3], [12, 2, 2], [20, 0, 1]];
+// Ce qu'un niveau a le droit de faire à une semaine donnée du plan
+function allowedType(t, P, w) {
+  const l = P.niveau || "intermediaire"; const i = w ? w.i : 0;
+  if (l === "novice") return !["vma", "seuil", "b2b", "cotes"].includes(t) && !(i < 12 && ["fartlek", "trail", "affutage"].includes(t)) && !(t === "mc" && mcStep(i) > 7);
+  if (l === "debutant") return t !== "b2b" && t !== "mc" && !(t === "vma" && i < 8) && !(i < 4 && ["fartlek", "cotes", "seuil", "trail", "vma"].includes(t));
+  if (i < 2) return t !== "vma" && t !== "mc";
+  return t !== "mc";
+}
+function pattern(w, n, P) {
+  P = P || S.profile; const lvl = P.niveau || "intermediaire";
+  if (w.phase === "Course") return ["repos", lvl === "novice" ? "ef" : "affutage", "repos", "ef", "repos", "recup", "repos"];
+  if (lvl === "novice") {
+    // 3 sorties maximum, une seule qualité légère après 12 semaines
+    const walk = mcStep(w.i) <= 7;
+    const run = walk ? "mc" : "ef";
+    let q = run;
+    if (!walk && w.i >= 12 && !w.rec) q = w.phase === "Spécifique" ? "trail" : w.phase === "Base" ? "ef" : "fartlek";
+    return ["repos", run, "renfo", q, "repos", "repos", walk ? "mc" : "sl"];
+  }
+  if (lvl === "debutant") {
+    // 4 premières semaines sans intensité, puis une seule séance de qualité par semaine
+    const easy = w.i < 4 || w.rec;
+    let q1 = easy ? "ef" : { "Base": w.i % 2 ? "cotes" : "fartlek", "Développement": w.i >= 8 && w.i % 2 ? "vma" : "cotes", "Spécifique": "seuil", "Affûtage": "affutage" }[w.phase];
+    const q2 = w.phase === "Spécifique" && !w.rec ? "trail" : "ef";
+    if (q2 === "trail" && q1 === "seuil") q1 = "ef";
+    if (n <= 3) return ["renfo", q1, "repos", q2, "renfo", "repos", "sl"];
+    return ["renfo", q1, "ef", "renfo", q2, "repos", "sl"];
+  }
   let q1 = { "Base": "vma", "Développement": "seuil", "Spécifique": "seuil", "Affûtage": "affutage" }[w.phase];
   let q2 = { "Base": "cotes", "Développement": "cotes", "Spécifique": "trail", "Affûtage": "ef" }[w.phase];
   if (w.rec) { q1 = "ef"; q2 = "ef"; }
+  if (w.i < 2 && q1 === "vma") q1 = "fartlek";
   const sat = w.phase === "Spécifique" && !w.rec ? "b2b" : "ef";
   if (n <= 3) return ["renfo", q1, "repos", q2, "renfo", "repos", "sl"];
   if (n === 4) return ["renfo", q1, "ef", "renfo", q2, "repos", "sl"];
   if (n === 5) return ["renfo", q1, "ef", q2, "repos", sat, "sl"];
   return ["recup", q1, "ef", q2, "renfo", sat, "sl"];
 }
-const KMW = { sl: .34, b2b: .2, ef: .16, recup: .1, vma: .13, seuil: .15, cotes: .13, trail: .24, affutage: .12 };
+const KMW = { sl: .34, b2b: .2, ef: .16, recup: .1, vma: .13, seuil: .15, cotes: .13, trail: .24, affutage: .12, mc: .3, fartlek: .14 };
 const TYPE_META = {
   repos: { t: "Repos", c: "var(--surface-2)", i: 0 }, ef: { t: "Endurance fondamentale", c: "var(--z2)", i: 1 }, recup: { t: "Footing de récupération", c: "var(--z1)", i: 1 },
   sl: { t: "Sortie longue", c: "var(--z3)", i: 3 }, b2b: { t: "Sortie longue J1", c: "var(--z3)", i: 3 }, vma: { t: "VMA courte", c: "var(--z5)", i: 5 },
   seuil: { t: "Seuil", c: "var(--z4)", i: 4 }, cotes: { t: "Côtes", c: "var(--z4)", i: 4 }, trail: { t: "Trail spécifique", c: "var(--z3)", i: 3 },
-  affutage: { t: "Rappel d'allure", c: "var(--z4)", i: 3 }, renfo: { t: "Renforcement trail", c: "var(--ink-3)", i: 2 }, course: { t: "Jour de course", c: "var(--accent)", i: 5 }
+  affutage: { t: "Rappel d'allure", c: "var(--z4)", i: 3 }, mc: { t: "Marche-course", c: "var(--z1)", i: 1 }, fartlek: { t: "Fartlek doux", c: "var(--z3)", i: 3 }, renfo: { t: "Renforcement trail", c: "var(--ink-3)", i: 2 }, course: { t: "Jour de course", c: "var(--accent)", i: 5 }
 };
 function sessionFor(date, opts = {}) {
   const P = S.profile; const w = weekOf(date);
   if (!w) return null;
   const wd = (parse(date).getDay() + 6) % 7;
-  const pat = pattern(w, +P.seances || 4);
+  const pat = pattern(w, +P.seances || 4, P);
   let type = pat[wd]; let note = null;
   if (date === S.plan.raceDate) type = "course";
   else if (date > S.plan.raceDate) type = "repos";
   const ov = S.overrides[date];
-  if (ov && type !== "course") { type = ov.type; note = ov.raison; }
+  if (ov && type !== "course" && allowedType(ov.type, P, w)) { type = ov.type; note = ov.raison; }
   const running = pat.filter(t => KMW[t]);
   const wsum = running.reduce((a, t) => a + KMW[t], 0) || 1;
   let km = KMW[type] ? w.km * (KMW[type] / wsum) : 0;
@@ -422,9 +459,25 @@ function makeSession(type, km, w, P, prog) {
       s.why = "Le repos fait partie de l'entraînement : c'est pendant la récupération que l'organisme s'adapte et progresse.";
       s.blocks = [["Mobilité", "10 minutes de mobilité douce (chevilles, hanches) et la routine d'étirements si tu as des tensions."], ["Sommeil", "Vise 8 h. Le sommeil est ton meilleur outil de récupération."]];
       s.ex = "stretch"; break;
+    case "mc": {
+      const [run, walk, n] = WALKRUN[clamp(mcStep(w.i), 0, 7)];
+      const cont = !walk;
+      s.min = 5 + n * (run + walk) + 5; s.zone = 1; s.km = +((n * run) / 60 * V * 0.6 + (10 + n * walk) / 60 * 5.5).toFixed(1);
+      s.blocks = [["Échauffement", "5' de marche rapide, en balançant bien les bras."],
+        ["Corps de séance", cont ? `${run}' de course continue, très lentement. Si tu es essoufflé, marche 1' puis repars : ce n'est pas un échec.` : `${n} × (${run}' de course très lente + ${walk}' de marche). Tu dois pouvoir parler pendant la course${P.fcMax ? ` (FC sous ${hr(P, .75)} bpm)` : ""}. Trop dur ? Refais la séance de la semaine d'avant.`],
+        ["Retour au calme", "5' de marche puis quelques étirements doux des mollets et des cuisses."]];
+      s.why = "Ton cœur progresse vite, mais tes tendons, os et articulations s'habituent plus lentement aux chocs. La marche-course les y prépare sans blessure : chaque semaine, un peu plus de course."; break; }
+    case "fartlek": {
+      const n = 6 + Math.round(prog * 4);
+      s.min = r5(15 + n * 2 + 10); s.zone = 3; s.km = +(s.min / 60 * V * 0.7).toFixed(1);
+      s.blocks = [["Échauffement", `15' en zone 2 (${zoneTxt(P, 2)}).`],
+        ["Corps de séance", `${n} × 1' un peu plus vite (effort 6 sur 10, tu peux encore dire quelques mots, zone 3) puis 1' de footing lent. Aucune fraction à fond.`],
+        ["Retour au calme", "10' faciles."]];
+      s.why = "Première approche du rythme sans se mettre dans le rouge : le cœur et les jambes découvrent des allures plus vives en douceur."; break; }
     case "ef": {
-      s.min = clamp(efMin(km), 30, 95); s.km = +(s.min / 60 * V * 0.68).toFixed(1); s.zone = 2;
-      s.blocks = [["Course continue", `${fmtMin(s.min)} en zone 2 (${zoneTxt(P, 2)}), allure ${paceR(P, .65, .72)}. Tu dois pouvoir parler en phrases complètes.`]];
+      const nov = P.niveau === "novice";
+      s.min = clamp(efMin(km), nov ? 20 : P.niveau === "debutant" ? 25 : 30, nov ? 60 : 95); s.km = +(s.min / 60 * V * 0.68).toFixed(1); s.zone = 2;
+      s.blocks = [["Course continue", nov ? `${fmtMin(s.min)} à allure très facile (${zoneTxt(P, 2)}). Tu dois pouvoir parler en phrases complètes. Marche 1' dès que tu en as besoin.` : `${fmtMin(s.min)} en zone 2 (${zoneTxt(P, 2)}), allure ${paceR(P, .65, .72)}. Tu dois pouvoir parler en phrases complètes.`]];
       if (w.rec || w.phase === "Affûtage") s.blocks.push(["Lignes droites", "En fin de séance : 4 × 80 m progressifs, récupération en marchant. Foulée relâchée, buste droit."]);
       if (+P.seances >= 5) s.blocks.push(["Gainage", "15 minutes après la séance : planche, gainage latéral, pont fessier (voir Exercices)."]);
       s.why = "Développe ton endurance cardiovasculaire (capillarisation, mitochondries) et ta capacité à utiliser les graisses, indispensable sur 80 km."; break; }
@@ -434,17 +487,18 @@ function makeSession(type, km, w, P, prog) {
       s.why = "Active la circulation pour accélérer la récupération sans ajouter de fatigue."; break;
     case "sl": case "b2b": {
       const trailF = w.phase === "Base" ? 1.05 : 1.2;
-      s.min = clamp(r5(km / (V * 0.65) * 60 * trailF), 60, type === "sl" ? 330 : 180); s.km = Math.round(km); s.zone = 2;
+      s.min = clamp(r5(km / (V * 0.65) * 60 * trailF), { novice: 30, debutant: 45 }[P.niveau] || 60, type === "sl" ? 330 : 180); s.km = Math.round(km); s.zone = 2;
       s.dplus = Math.round(w.dplus * (type === "sl" ? 0.45 : 0.25) / 10) * 10;
       s.blocks = [["Départ", `20 premières minutes très faciles en zone 1–2 (${zoneTxt(P, 2)}).`],
         ["Corps de séance", `${fmtMin(s.min)} au total, ${s.km} km${s.dplus ? ` et environ ${s.dplus} m D+` : ""}. Reste en zone 2. ${w.phase !== "Base" ? "Marche active dès que la pente dépasse 15 %, mains sur les cuisses." : "Parcours vallonné, sans forcer dans les montées."}`]];
+      if (P.niveau === "novice") s.blocks.push(["Marche autorisée", "Marche dans chaque montée et dès que tu es essoufflé. L'objectif est la durée, pas la vitesse."]);
       if (w.phase === "Spécifique" && type === "sl") s.blocks.push(["Fin spécifique", "Les 30 dernières minutes à allure course (zone 2 haute) pour apprendre à courir fatigué."]);
       if (s.min >= 90) s.blocks.push(["Ravitaillement", `À partir de la 1re heure : ${w.phase === "Spécifique" ? "70–90" : "50–60"} g de glucides et 500–600 ml d'eau par heure, avec 300–500 mg de sodium. C'est le moment de tester ce que tu prendras le jour J.`]);
       if (type === "b2b") s.blocks.push(["Enchaînement", "Demain : sortie longue. Le but est d'apprendre à courir sur des jambes déjà fatiguées, comme en 2e moitié de course."]);
       s.why = type === "sl" ? "La séance-clé de l'ultra : endurance, résistance musculaire en montée et descente, gestion de l'alimentation." : "Premier jour d'un week-end choc : cumuler du temps sur les jambes sans faire une seule sortie démesurée.";
       s.ex = "stretch"; break; }
     case "vma": {
-      const reps = 8 + Math.round(prog * 4); const sets = 2;
+      const deb = P.niveau === "debutant"; const reps = (deb ? 6 : 8) + Math.round(prog * (deb ? 2 : 4)); const sets = deb ? 1 : 2;
       s.min = 20 + sets * reps + 3 * (sets - 1) + 10; s.zone = 5; s.km = +(s.min / 60 * V * 0.75).toFixed(1);
       s.blocks = [["Échauffement", `20' en zone 2 (${paceR(P, .65, .7)}) puis 3 accélérations progressives de 20".`],
         ["Corps de séance", `${sets} séries de ${reps} × 30" vite / 30" trot. Allure 30" : ${paceR(P, .98, 1.03)} (≈ ${Math.round(V * 1000 / 120)} m par fraction). 3' de trot entre les séries.`],
@@ -461,7 +515,7 @@ function makeSession(type, km, w, P, prog) {
     case "cotes": {
       const base = w.phase === "Base";
       s.zone = base ? 5 : 4;
-      if (base) { const n = 8 + Math.round(prog * 4); s.min = 20 + n * 1.5 + 10; s.blocks = [["Échauffement", "20' en zone 2 jusqu'au pied d'une côte de 6 à 10 %."], ["Corps de séance", `${n} × 30" en côte, effort intense (zone 5), genoux hauts et poussée active de la cheville. Récupération en descendant au trot.`], ["Retour au calme", "10' faciles sur le plat."]]; }
+      if (base) { const n = (P.niveau === "debutant" ? 6 : 8) + Math.round(prog * (P.niveau === "debutant" ? 2 : 4)); s.min = 20 + n * 1.5 + 10; s.blocks = [["Échauffement", "20' en zone 2 jusqu'au pied d'une côte de 6 à 10 %."], ["Corps de séance", `${n} × 30" en côte, effort intense (zone 5), genoux hauts et poussée active de la cheville. Récupération en descendant au trot.`], ["Retour au calme", "10' faciles sur le plat."]]; }
       else { const n = 5 + Math.round(prog * 2); s.min = 20 + n * 5 + 10; s.blocks = [["Échauffement", "20' en zone 2 jusqu'à une côte longue de 5 à 8 %."], ["Corps de séance", `${n} × 3' en côte à effort seuil (FC ${zoneTxt(P, 4)}). Alterne course et marche rapide si la pente est raide. Redescends en trottinant, foulée courte et relâchée.`], ["Retour au calme", "10' faciles."]]; }
       s.min = r5(s.min); s.km = +(s.min / 60 * V * 0.7).toFixed(1); s.dplus = base ? 150 : 300;
       s.why = "Renforce quadriceps, mollets et fessiers en courant, et améliore l'économie de course en montée."; break; }
@@ -648,7 +702,7 @@ function renderNav() {
   $("#profile-label").textContent = S.profile.prenom || "Profil";
 }
 function render() {
-  if (!S.plan) S.plan = buildPlan(S.profile);
+  if (!S.plan || S.plan.ver !== 2) S.plan = buildPlan(S.profile);
   renderNav();
   const v = $("#view");
   document.body.classList.toggle("is-home", UI.view === "today");
@@ -656,6 +710,15 @@ function render() {
   v.innerHTML = fn();
   if (UI.view === "log") bindDrop();
   setBGView(UI.view);
+}
+function planWarn() {
+  const P = S.profile; const l = P.niveau; const nW = S.plan.weeks.length;
+  if (P.example) return "";
+  let msg = "";
+  if (l === "novice" && (P.distance > 30 || nW < 26)) msg = `Un ${P.distance} km se prépare en général après 2 à 3 ans de course régulière. Ton plan commence par de la marche-course et monte très progressivement pour éviter la blessure. Vise d'abord un 10 km puis un trail de 20 à 30 km cette saison.`;
+  else if (l === "debutant" && P.distance >= 60) msg = `Pour un ${P.distance} km, un débutant a besoin de beaucoup de patience. Le plan reste prudent (une seule séance intense par semaine). Un trail de 30 à 50 km avant serait une très bonne étape.`;
+  else if (nW < 12 && P.distance >= 60) msg = `Moins de 12 semaines pour un ${P.distance} km, c'est court. Le volume monte au maximum de 10 % par semaine, quitte à ne pas atteindre le pic idéal.`;
+  return msg ? `<div class="card" style="border-color:var(--accent)"><p class="small"><b>Conseil du coach.</b> ${msg}</p></div>` : "";
 }
 function exampleBanner() {
   if (!S.profile.example) return "";
@@ -731,7 +794,7 @@ function vPlan() {
   }).join("");
   const days = [0, 1, 2, 3, 4, 5, 6].map(k => { const d = addDays(w.start, k); const s = sessionFor(d, { raw: d !== TODAY }); return { d, s }; });
   const tot = days.reduce((a, x) => a + (x.s && x.s.type !== "course" ? x.s.min : 0), 0);
-  return `${exampleBanner()}
+  return `${exampleBanner()}${planWarn()}
   <div class="card">
     <div class="row between"><div class="stack" style="gap:2px"><span class="eyebrow">Programme</span><h2>${weeks.length} semaines vers le ${P.distance} km</h2></div>
     ${SAMPLE ? `<button class="btn secondary" type="button" data-act="ai-week" style="min-height:38px;padding:6px 12px">${ICONS.spark}Ajuster avec le coach IA</button>` : ""}</div>
@@ -866,7 +929,7 @@ function vProfile() {
     <div class="card"><h3>Physiologie</h3>
       <div class="grid3">${f("vma", "VMA (km/h)", "number", 'step="0.1" min="8" max="25"', "Test demi-Cooper ou 6 min")}${f("fcRepos", "FC repos", "number", 'min="30" max="100"', "Au réveil, allongé")}${f("fcMax", "FC max", "number", 'min="140" max="230"', "Mesurée en test")}</div></div>
     <div class="card"><h3>Entraînement actuel</h3>
-      <div class="grid2"><label class="f">Niveau<select id="p-niveau">${[["debutant", "Débutant (moins d'1 an)"], ["intermediaire", "Intermédiaire"], ["confirme", "Confirmé"]].map(([k, t]) => `<option value="${k}" ${P.niveau === k ? "selected" : ""}>${t}</option>`).join("")}</select></label>${f("kmSemaine", "Km par semaine actuellement", "number", 'min="0" max="200"')}</div>
+      <div class="grid2"><label class="f">Niveau<select id="p-niveau">${[["novice", "Je n'ai jamais couru"], ["debutant", "Débutant (moins d'1 an)"], ["intermediaire", "Intermédiaire"], ["confirme", "Confirmé"]].map(([k, t]) => `<option value="${k}" ${P.niveau === k ? "selected" : ""}>${t}</option>`).join("")}</select></label>${f("kmSemaine", "Km par semaine actuellement", "number", 'min="0" max="200"')}</div>
       <label class="f">Séances de course par semaine<select id="p-seances">${[3, 4, 5, 6].map(n => `<option ${+P.seances === n ? "selected" : ""}>${n}</option>`).join("")}</select></label></div>
     <div class="card"><h3>Objectif</h3>
       ${f("course", "Nom de la course", "text")}
@@ -1028,12 +1091,12 @@ ${recentTxt()}
 Séances prévues les 7 prochains jours :
 ${next}
 
-Ajuste les 7 prochains jours en fonction de la fatigue, des séances récentes et de l'objectif. Garde la structure du plan sauf raison claire. Types possibles : "ef", "recup", "repos", "vma", "seuil", "cotes", "trail", "sl", "b2b", "renfo".
+Ajuste les 7 prochains jours en fonction de la fatigue, des séances récentes et de l'objectif. Garde la structure du plan sauf raison claire. Respecte le niveau : un novice ne fait que de la marche-course, de l'endurance et du renforcement léger, sans VMA ni seuil ; un débutant ne fait pas de VMA avant la 9e semaine et au plus une séance intense par semaine ; le volume ne monte jamais de plus de 10 % par semaine. Types possibles : "mc" (marche-course), "ef", "recup", "repos", "fartlek", "vma", "seuil", "cotes", "trail", "sl", "b2b", "renfo".
 Réponds UNIQUEMENT avec un JSON : {"message": "bilan en 3-4 phrases avec tes consignes clés", "facteur_charge": number entre 0.8 et 1.1, "modifications": [{"date": "YYYY-MM-DD", "type": "…", "raison": "phrase courte"}]} (modifications peut être vide).`;
   try {
     const r = await SAMPLE.json(prompt, { modelTier: "default", cache: false });
     const valid = Object.keys(TYPE_META).filter(t => t !== "course");
-    (r.modifications || []).forEach(m => { if (valid.includes(m.type) && /^\d{4}-\d{2}-\d{2}$/.test(m.date) && m.date >= TODAY && m.date <= addDays(TODAY, 7)) S.overrides[m.date] = { type: m.type, raison: "Coach IA : " + (m.raison || "") }; });
+    (r.modifications || []).forEach(m => { if (valid.includes(m.type) && allowedType(m.type, S.profile, weekOf(m.date)) && /^\d{4}-\d{2}-\d{2}$/.test(m.date) && m.date >= TODAY && m.date <= addDays(TODAY, 7)) S.overrides[m.date] = { type: m.type, raison: "Coach IA : " + (m.raison || "") }; });
     const f = +r.facteur_charge; if (f) S.adapt = { factor: clamp(f, 0.75, 1.1), from: TODAY, until: addDays(TODAY, 6), reason: "Bilan IA" };
     persist(); render();
     openSheet(`<div class="row between"><span class="eyebrow">Bilan du coach</span><button class="iconbtn" type="button" data-close>Fermer</button></div><h2>Ta semaine ajustée</h2><p>${esc(r.message || "")}</p>
