@@ -381,11 +381,13 @@ function weekOf(date) {
 }
 // Marche-course : étape atteinte en semaine i (les semaines allégées répètent l'étape précédente)
 const mcStep = i => i - Math.floor((i + 1) / 4);
+// Étape réelle : avance plus vite quand les séances de marche-course sont faciles
+const mcLvl = i => mcStep(i) + ((typeof S !== "undefined" && S.mcShift) || 0);
 const WALKRUN = [[1, 2, 8], [2, 2, 6], [3, 2, 5], [4, 2, 4], [6, 2, 3], [8, 2, 3], [12, 2, 2], [20, 0, 1]];
 // Ce qu'un niveau a le droit de faire à une semaine donnée du plan
 function allowedType(t, P, w) {
   const l = P.niveau || "intermediaire"; const i = w ? w.i : 0;
-  if (l === "novice") return !["vma", "seuil", "b2b", "cotes"].includes(t) && !(i < 12 && ["fartlek", "trail", "affutage"].includes(t)) && !(t === "mc" && mcStep(i) > 7);
+  if (l === "novice") return !["vma", "seuil", "b2b", "cotes"].includes(t) && !(i < 12 && ["fartlek", "trail", "affutage"].includes(t)) && !(t === "mc" && mcLvl(i) > 7);
   if (l === "debutant") return t !== "b2b" && t !== "mc" && !(t === "vma" && i < 8) && !(i < 4 && ["fartlek", "cotes", "seuil", "trail", "vma"].includes(t));
   if (i < 2) return t !== "vma" && t !== "mc";
   return t !== "mc";
@@ -395,7 +397,7 @@ function pattern(w, n, P) {
   if (w.phase === "Course") return ["repos", lvl === "novice" ? "ef" : "affutage", "repos", "ef", "repos", "recup", "repos"];
   if (lvl === "novice") {
     // 3 sorties maximum, une seule qualité légère après 12 semaines
-    const walk = mcStep(w.i) <= 7;
+    const walk = mcLvl(w.i) <= 7;
     const run = walk ? "mc" : "ef";
     let q = run;
     if (!walk && w.i >= 12 && !w.rec) q = w.phase === "Spécifique" ? ((+P.dplus || 0) / (+P.distance || 1) >= 15 ? "trail" : "fartlek") : w.phase === "Base" ? "ef" : "fartlek";
@@ -444,7 +446,8 @@ function sessionFor(date, opts = {}) {
   if (S.adapt && date >= S.adapt.from && date <= S.adapt.until && type !== "course" && KMW[type]) factor = S.adapt.factor;
   km *= factor;
   const phaseIdx = S.plan.weeks.filter(x => x.phase === w.phase);
-  const prog = phaseIdx.length > 1 ? phaseIdx.indexOf(w) / (phaseIdx.length - 1) : 0.5;
+  let prog = phaseIdx.length > 1 ? phaseIdx.indexOf(w) / (phaseIdx.length - 1) : 0.5;
+  if (ov && ov.up && allowedType(ov.type, P, w)) prog = Math.min(1, prog + 0.4);
   let s = makeSession(type, km, w, P, prog);
   if (ov && ov.light && type === "renfo") {
     s.min = 20; s.i = 1; s.title = "Renforcement léger";
@@ -474,7 +477,7 @@ function makeSession(type, km, w, P, prog) {
       s.blocks = [["Mobilité", "10 minutes de mobilité douce (chevilles, hanches) et la routine d'étirements si tu as des tensions."], ["Sommeil", "Vise 8 h. Le sommeil est ton meilleur outil de récupération."]];
       s.ex = "stretch"; break;
     case "mc": {
-      const [run, walk, n] = WALKRUN[clamp(mcStep(w.i), 0, 7)];
+      const [run, walk, n] = WALKRUN[clamp(mcLvl(w.i), 0, 7)];
       const cont = !walk;
       s.min = 5 + n * (run + walk) + 5; s.zone = 1; s.km = +((n * run) / 60 * V * 0.6 + (10 + n * walk) / 60 * 5.5).toFixed(1);
       s.blocks = [["Échauffement", "5' de marche rapide, en balançant bien les bras."],
@@ -1026,6 +1029,17 @@ function ruleAnalysis(date, s, d) {
     else if (s.zone >= 4 && fz <= 2) { axes.push("FC moyenne basse pour une séance de qualité : vérifie que les fractions étaient assez soutenues."); resp = "trop facile"; note -= 1; }
     else forts.push(`FC moyenne (${d.fc} bpm) cohérente avec l'objectif de la séance.`);
   }
+  const spd = d.dist && d.dur ? d.dist / (d.dur / 60) : 0;
+  if (spd && d.dur >= 6 && spd > P.vma * 1.1) {
+    axes.unshift(`Allure de ${fmtPace(spd)}/km pendant ${Math.round(d.dur)}' : c'est plus rapide que ta VMA (${P.vma} km/h), donc impossible à tenir aussi longtemps. Vérifie la distance et la durée saisies.`);
+    resp = "à vérifier"; note = 5;
+  } else if (s && s.km && s.min && KMW[s.type] && resp !== "trop intense") {
+    const plannedPace = s.min / s.km, pace = d.dur / d.dist;
+    const relaxed = (fz && s.zone && fz <= s.zone) || (d.rpe && d.rpe <= 4);
+    if (d.dist && pace < plannedPace * 0.9 && relaxed) { forts.push(`Allure (${fmtPace(spd)}/km) nettement plus rapide que prévu pour un effort maîtrisé : tu as de la marge.`); resp = "trop facile"; note += 1; }
+    if (d.dist > s.km * 1.3 && relaxed) { forts.push(`${d.dist} km au lieu de ${s.km} km prévus, sans te mettre dans le rouge.`); resp = "trop facile"; }
+    if (d.rpe && d.rpe <= 3 && s.i <= 3 && resp === "conforme") { forts.push(`Effort ressenti très faible (${d.rpe}/10) : la séance était trop facile pour toi.`); resp = "trop facile"; }
+  }
   if (d.rpe >= 8 && s && s.i <= 2) { axes.push("Effort ressenti très élevé pour une séance facile : signe possible de fatigue."); note -= 1; }
   if (d.dp > 300) forts.push(`Beau travail en dénivelé : ${d.dp} m D+.`);
   if (!forts.length) forts.push("Séance réalisée : la régularité est la clé de la progression.");
@@ -1062,12 +1076,19 @@ function adaptAfter(log) {
   S.logs.filter(l => !l.example && l !== log && l.date < log.date && l.date >= addDays(log.date, -4))
     .forEach(l => { if (["élevée", "très élevée"].includes(l.charge) || l.respect_consigne === "trop intense") F += 1; });
   const ck = S.checkins[log.date]; if (ck && readiness(ck) < 50) F += 1;
-  const easy = F <= -1 && +log.note >= 8 && log.respect_consigne !== "trop intense";
+  const check = log.respect_consigne === "à vérifier";
+  const easy = !check && ((log.respect_consigne === "trop facile" && F <= 0) || (F <= -1 && +log.note >= 8 && log.respect_consigne !== "trop intense"));
   // On repart de zéro pour les jours suivants : les adaptations automatiques précédentes sont recalculées
   Object.keys(S.overrides).forEach(d => { if (d > log.date && S.overrides[d].auto) delete S.overrides[d]; });
   const P = S.profile; const lines = []; const when = fmtDate(log.date, { weekday: "long" });
   const set = (d, type, why) => { S.overrides[d] = { type, raison: `Après ta séance de ${when} : ${why}.`, auto: true, src: log.id }; };
   let moved = null, softened = false, pushed = false;
+  if (check) { log.ajustements = ["Données à vérifier : le plan n'est pas modifié tant que la saisie semble incorrecte."]; log.facteur_prochaines_seances = 1; log.fatigue = F; return; }
+  if (easy && s && s.type === "mc" && (S.mcShift || 0) < 3) {
+    S.mcShift = (S.mcShift || 0) + 1; log.mcShifted = true;
+    const nw = weekOf(addDays(log.date, 1)) || weekOf(log.date); const st = WALKRUN[clamp(mcLvl(nw.i), 0, 7)];
+    lines.push(mcLvl(nw.i) > 7 ? "Marche-course validée en avance : tu passes à la course continue." : `Marche-course : tu passes à l'étape suivante (${st[2] > 1 ? st[2] + " × " : ""}${st[0]}' de course${st[1] ? " / " + st[1] + "' de marche" : " continue"}).`);
+  }
   for (let k = 1; k <= 7; k++) {
     const d = addDays(log.date, k); if (d < TODAY) continue;
     const w = weekOf(d); if (!w || d >= S.plan.raceDate) break;
@@ -1090,14 +1111,14 @@ function adaptAfter(log) {
         const nx = sessionFor(addDays(d, 1), { raw: true });
         if (!nx || nx.i < 3) { set(d, moved.type, `séance « ${moved.title} » décalée ici`); lines.push(`${day} : ${t.title} → ${moved.title} (séance de qualité décalée).`); moved = null; continue; }
       }
-    } else if (log.respect_consigne === "trop facile" && t.i >= 3 && !pushed) {
-      set(d, t.type, "la dernière séance de qualité était trop facile, vise le haut de la fourchette d'allure"); pushed = true;
-      lines.push(`${day} : ${t.title} maintenue, en visant le haut de la fourchette d'allure.`); continue;
+    } else if (easy && t.i >= 3 && !pushed) {
+      set(d, t.type, "tu as de la marge, la séance est renforcée (plus de répétitions) et vise le haut de la fourchette d'allure"); S.overrides[d].up = true; pushed = true;
+      lines.push(`${day} : ${t.title} renforcée (plus de répétitions).`); continue;
     }
     if (nt && allowedType(nt, P, w)) { set(d, nt, why); lines.push(`${day} : ${t.title} → ${TYPE_META[nt].t} (${why}).`); }
   }
-  let factor = F >= 4 ? 0.85 : F >= 2 ? 0.92 : easy ? 1.05 : 1;
   const prevA = S.adapt && S.adapt.until >= addDays(log.date, 1) ? S.adapt : null;
+  let factor = F >= 4 ? 0.85 : F >= 2 ? 0.92 : easy ? (prevA && prevA.factor > 1 ? Math.min(1.1, prevA.factor + 0.03) : log.respect_consigne === "trop facile" ? 1.08 : 1.05) : 1;
   if (factor === 1 && prevA && Math.abs(prevA.factor - 1) > 0.03) { factor = Math.round((prevA.factor + 1) / 2 * 100) / 100; lines.push("Séance bien passée : le volume revient progressivement à la normale."); }
   if (factor !== 1) S.adapt = { factor, from: addDays(log.date, 1), until: addDays(log.date, 7), reason: log.verdict, src: log.id };
   else S.adapt = null;
@@ -1635,7 +1656,7 @@ document.addEventListener("click", e => {
   else if (a === "wcur") { UI.planWeek = null; render(); }
   else if (a === "wnext") { UI.planWeek++; render(); }
   else if (a === "ai-week") aiWeek(t);
-  else if (a === "del-log") { const id = t.dataset.id; S.logs = S.logs.filter(l => l.id !== id); Object.keys(S.overrides).forEach(d => { if (S.overrides[d].src === id) delete S.overrides[d]; }); if (S.adapt?.src === id) S.adapt = null; persist(); closeSheet(); render(); toast("Analyse supprimée"); }
+  else if (a === "del-log") { const id = t.dataset.id; if (S.logs.find(l => l.id === id)?.mcShifted) S.mcShift = Math.max(0, (S.mcShift || 0) - 1); S.logs = S.logs.filter(l => l.id !== id); Object.keys(S.overrides).forEach(d => { if (S.overrides[d].src === id) delete S.overrides[d]; }); if (S.adapt?.src === id) S.adapt = null; persist(); closeSheet(); render(); toast("Analyse supprimée"); }
 });
 $("#btn-profile").addEventListener("click", () => go("profile"));
 // Dans Claude, la page tourne dans un cadre qui bloque l'envoi natif des formulaires :
@@ -1669,7 +1690,7 @@ document.addEventListener("submit", e => {
     ["prenom", "ville", "sexe", "niveau", "course", "raceDate", ...num].forEach(k => { const el = $("#p-" + k); if (el) P[k] = num.includes(k) ? +el.value : el.value.trim(); });
     if (+P.fcMax <= +P.fcRepos) { toast("La FC max doit être supérieure à la FC de repos."); return; }
     if (!P.raceDate || P.raceDate <= TODAY) { toast("Choisis une date de course dans le futur."); return; }
-    P.example = false; S.logs = S.logs.filter(l => !l.example); S.plan = buildPlan(P); S.overrides = {}; S.adapt = null; UI.planWeek = null;
+    P.example = false; S.logs = S.logs.filter(l => !l.example); S.mcShift = 0; S.plan = buildPlan(P); S.overrides = {}; S.adapt = null; UI.planWeek = null;
     persist(); go("plan"); toast(`Plan recalculé : ${S.plan.weeks.length} semaines`);
   }
   if (e.target.id === "chat-form") { e.preventDefault(); const q = $("#chat-in").value.trim(); if (q && SAMPLE) sendChat(q); }
