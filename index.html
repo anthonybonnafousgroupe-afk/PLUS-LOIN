@@ -279,6 +279,9 @@ const fmtDate = (s, o = { weekday: "long", day: "numeric", month: "long" }) => p
 const cap = s => s.charAt(0).toUpperCase() + s.slice(1);
 const fmtPace = kmh => { let sec = Math.round(3600 / kmh); const m = Math.floor(sec / 60); const s = sec % 60; return `${m}'${String(s).padStart(2, "0")}`; };
 const fmtMin = m => m >= 60 ? `${Math.floor(m / 60)}h${String(Math.round(m % 60)).padStart(2, "0")}` : `${Math.round(m)}'`;
+// Séances sans analyse (renforcement) : "fait" ou "non" par date
+const doneMark = d => (S.done || {})[d];
+const isDone = d => S.logs.some(l => l.date === d && !l.example) || doneMark(d) === "fait";
 function toast(t) { const el = document.createElement("div"); el.className = "toast"; el.textContent = t; document.body.appendChild(el); setTimeout(() => el.remove(), 2600); }
 const store = { get(k) { try { return JSON.parse(localStorage.getItem(k)); } catch (e) { return null; } }, set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) {} } };
 
@@ -728,14 +731,14 @@ function intensity(i) { return `<span class="int" aria-label="Intensité ${i} su
 function sessionCard(s, opts = {}) {
   if (!s) return `<div class="card"><p class="muted">Aucune séance prévue à cette date (hors plan).</p></div>`;
   const P = S.profile;
-  const done = S.logs.some(l => l.date === s.date && !l.example);
+  const done = isDone(s.date); const missed = doneMark(s.date) === "non";
   const meta = [s.min ? `<div class="stat"><span class="v num">${fmtMin(s.min)}</span><span class="l">Durée</span></div>` : "",
     s.km ? `<div class="stat"><span class="v num">${s.km}<small>km</small></span><span class="l">Distance</span></div>` : "",
     s.dplus ? `<div class="stat"><span class="v num">${s.dplus}<small>m</small></span><span class="l">D+</span></div>` : "",
     s.zone ? `<div class="stat"><span class="v" style="color:${ZCOL(s.zone)}">Z${s.zone}</span><span class="l">${zoneTxt(P, s.zone)}</span></div>` : ""].filter(Boolean);
   const ex = s.ex ? `<div class="stack"><div class="eyebrow">${s.ex === "stretch" ? "Routine d'étirements" : "Exercices du circuit"}</div><div class="exgrid">${CIRCUITS[s.ex].map(id => exTile(id, s.week)).join("")}</div></div>` : "";
   return `<div class="card">
-    <div class="row between"><span class="eyebrow">${cap(fmtDate(s.date))} · Semaine ${s.week.i + 1} · ${s.week.phase}${s.week.rec ? " (allégée)" : ""}</span>${done ? '<span class="chip good">Réalisée</span>' : ""}</div>
+    <div class="row between"><span class="eyebrow">${cap(fmtDate(s.date))} · Semaine ${s.week.i + 1} · ${s.week.phase}${s.week.rec ? " (allégée)" : ""}</span>${done ? '<span class="chip good">Réalisée</span>' : missed ? '<span class="chip">Non réalisée</span>' : ""}</div>
     <div class="session-head"><div style="flex:1;min-width:0"><h1 style="font-size:${opts.small ? 26 : 34}px">${esc(s.title)}</h1></div>${s.i ? intensity(s.i) : ""}</div>
     ${s.note ? `<div class="banner" style="border-style:solid"><span><b>Adapté :</b> ${esc(s.note)}</span></div>` : ""}
     ${s.factor && s.factor !== 1 ? `<span class="chip mark">Volume ajusté × ${s.factor.toFixed(2)} par le coach</span>` : ""}
@@ -743,7 +746,8 @@ function sessionCard(s, opts = {}) {
     <div class="blocks">${s.blocks.map((b, k) => `<div class="blk ${/Corps|Circuit|Course continue|Montées|Rappel|Footing/.test(b[0]) ? "main" : ""}"><b>${esc(b[0])}</b><p>${esc(b[1])}</p></div>`).join("")}</div>
     <div class="why"><b>Pourquoi cette séance ?</b> ${esc(s.why)}</div>
     ${ex}
-    ${opts.actions && s.type !== "repos" ? `<div class="grid2"><button class="btn" type="button" data-act="import" data-date="${s.date}">${ICONS.cam}Importer ma séance</button><button class="btn secondary" type="button" data-act="manual" data-date="${s.date}">Saisir à la main</button></div>` : ""}
+    ${opts.actions && s.type === "renfo" ? (doneMark(s.date) ? `<button class="btn ghost block" type="button" data-act="mark-undo" data-date="${s.date}">${done ? "Séance faite ✓" : "Séance non réalisée"} · Modifier</button>` : `<div class="grid2"><button class="btn" type="button" data-act="mark-done" data-date="${s.date}">Séance faite</button><button class="btn secondary" type="button" data-act="mark-miss" data-date="${s.date}">Non réalisée</button></div>`) : ""}
+    ${opts.actions && s.type !== "repos" && s.type !== "renfo" ? `<div class="grid2"><button class="btn" type="button" data-act="import" data-date="${s.date}">${ICONS.cam}Importer ma séance</button><button class="btn secondary" type="button" data-act="manual" data-date="${s.date}">Saisir à la main</button></div>` : ""}
   </div>`;
 }
 function exTile(id, w) {
@@ -752,7 +756,7 @@ function exTile(id, w) {
 }
 function weekStrip(ws, sel) {
   return `<div class="week">${[0, 1, 2, 3, 4, 5, 6].map(k => {
-    const d = addDays(ws, k); const s = sessionFor(d, { raw: d !== TODAY }); const done = S.logs.some(l => l.date === d && !l.example);
+    const d = addDays(ws, k); const s = sessionFor(d, { raw: d !== TODAY }); const done = isDone(d);
     const c = s ? TYPE_META[s.type].c : "var(--surface-2)";
     return `<button type="button" class="day ${d === sel ? "sel" : ""} ${d === TODAY ? "today" : ""} ${done ? "done" : ""}" data-day="${d}" aria-label="${fmtDate(d)} : ${s ? s.title : "hors plan"}"><span>${JOURS[k]}</span><span class="d">${parse(d).getDate()}</span><span class="t" style="background:${c}"></span></button>`;
   }).join("")}</div>`;
@@ -807,7 +811,7 @@ function vPlan() {
       <button class="iconbtn" type="button" data-act="wnext" ${w.i === weeks.length - 1 ? "disabled" : ""} aria-label="Semaine suivante">›</button></div>
     <div class="grid3"><div class="stat"><span class="v num">${w.km}<small>km</small></span><span class="l">Volume visé</span></div><div class="stat"><span class="v num">${w.dplus}<small>m</small></span><span class="l">Dénivelé +</span></div><div class="stat"><span class="v num">${fmtMin(tot)}</span><span class="l">Temps total</span></div></div>
     <div class="why"><b>${w.phase}.</b> ${PHASE_WHY[w.phase]}${w.rec ? " Semaine allégée : on assimile le travail des 3 semaines précédentes." : ""}</div>
-    <div class="stack">${days.map(({ d, s }) => s ? `<button type="button" class="logitem" data-day="${d}" data-goto="session"><span class="sc" style="background:${TYPE_META[s.type].c};color:${s.type === "repos" ? "var(--ink-3)" : "#fff"};font-size:13px">${JOURS[(parse(d).getDay() + 6) % 7]}</span><span style="flex:1;min-width:0"><b>${esc(s.title)}</b><br><span class="small muted">${[s.min ? fmtMin(s.min) : "", s.km ? s.km + " km" : "", s.dplus ? s.dplus + " m D+" : "", s.zone ? "Z" + s.zone : ""].filter(Boolean).join(" · ") || "Récupération"}${s.note ? " · ajustée" : ""}</span></span>${S.logs.some(l => l.date === d && !l.example) ? '<span class="chip good">✓</span>' : ""}</button>` : "").join("")}</div>
+    <div class="stack">${days.map(({ d, s }) => s ? `<button type="button" class="logitem" data-day="${d}" data-goto="session"><span class="sc" style="background:${TYPE_META[s.type].c};color:${s.type === "repos" ? "var(--ink-3)" : "#fff"};font-size:13px">${JOURS[(parse(d).getDay() + 6) % 7]}</span><span style="flex:1;min-width:0"><b>${esc(s.title)}</b><br><span class="small muted">${[s.min ? fmtMin(s.min) : "", s.km ? s.km + " km" : "", s.dplus ? s.dplus + " m D+" : "", s.zone ? "Z" + s.zone : ""].filter(Boolean).join(" · ") || "Récupération"}${s.note ? " · ajustée" : ""}</span></span>${isDone(d) ? '<span class="chip good">✓</span>' : doneMark(d) === "non" ? '<span class="chip">✗</span>' : ""}</button>` : "").join("")}</div>
   </div>
   <div class="card"><span class="eyebrow">Tes repères</span>
     <div class="tablewrap"><table class="ztable"><thead><tr><th>Zone</th><th>Usage</th><th style="text-align:right">FC</th><th style="text-align:right">Allure</th></tr></thead><tbody>
@@ -1306,7 +1310,7 @@ function weatherCard() {
 function weekStats() {
   const w = weekOf(TODAY); if (!w) return null;
   let planned = 0, doneN = 0, kmDone = 0;
-  for (let k = 0; k < 7; k++) { const d = addDays(w.start, k); const s = sessionFor(d, { raw: true }); if (s && s.type !== "repos") planned++; if (S.logs.some(l => l.date === d && !l.example)) doneN++; }
+  for (let k = 0; k < 7; k++) { const d = addDays(w.start, k); const s = sessionFor(d, { raw: true }); if (s && s.type !== "repos") planned++; if (isDone(d)) doneN++; }
   S.logs.filter(l => !l.example && l.date >= w.start && l.date <= addDays(w.start, 6)).forEach(l => kmDone += +(l.donnees?.distance_km) || 0);
   return { w, planned, doneN, kmDone: Math.round(kmDone * 10) / 10 };
 }
@@ -1551,6 +1555,8 @@ document.addEventListener("click", e => {
   if (a === "checkin") checkinSheet();
   else if (a === "import") { UI.importDate = t.dataset.date; go("log"); }
   else if (a === "manual") manualSheet(t.dataset.date || ($("#log-date") ? $("#log-date").value : TODAY));
+  else if (a === "mark-done" || a === "mark-miss") { S.done = S.done || {}; S.done[t.dataset.date] = a === "mark-done" ? "fait" : "non"; persist(); render(); toast(a === "mark-done" ? "Bravo, séance validée" : "Séance notée comme non réalisée"); }
+  else if (a === "mark-undo") { if (S.done) delete S.done[t.dataset.date]; persist(); render(); }
   else if (a === "wprev") { UI.planWeek--; render(); }
   else if (a === "wnext") { UI.planWeek++; render(); }
   else if (a === "ai-week") aiWeek(t);
