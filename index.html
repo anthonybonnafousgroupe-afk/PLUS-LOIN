@@ -763,6 +763,7 @@ function sessionCard(s, opts = {}) {
     <div class="why"><b>Pourquoi cette séance ?</b> ${esc(s.why)}</div>
     ${ex}
     ${opts.actions && s.type === "renfo" ? (doneMark(s.date) ? `<button class="btn ghost block" type="button" data-act="mark-undo" data-date="${s.date}">${done ? "Séance faite ✓" : "Séance non réalisée"} · Modifier</button>` : `<div class="grid2"><button class="btn" type="button" data-act="mark-done" data-date="${s.date}">Séance faite</button><button class="btn secondary" type="button" data-act="mark-miss" data-date="${s.date}">Non réalisée</button></div>`) : ""}
+    ${opts.actions && KMW[s.type] && s.km ? `<button class="btn block" type="button" data-act="start-run" data-date="${s.date}" style="background:linear-gradient(135deg,var(--accent),var(--accent-2));color:#1a0d05">▶ Lancer mon entraînement · boucle de ${s.km} km</button>` : ""}
     ${opts.actions && s.type !== "repos" && s.type !== "renfo" ? `<div class="grid2"><button class="btn" type="button" data-act="import" data-date="${s.date}">${ICONS.cam}Importer ma séance</button><button class="btn secondary" type="button" data-act="manual" data-date="${s.date}">Saisir à la main</button></div>` : ""}
   </div>`;
 }
@@ -955,6 +956,9 @@ function vProfile() {
     <div class="card"><h3>Objectif</h3>
       ${f("course", "Nom de la course", "text")}
       <div class="grid3">${f("distance", "Distance (km)", "number", 'min="10" max="200"')}${f("dplus", "D+ (m)", "number", 'min="0" max="12000" step="50"')}${f("raceDate", "Date", "date")}</div></div>
+    <div class="card"><h3>Parcours</h3>
+      ${f("orsKey", "Clé cartographie (OpenRouteService)", "password", 'autocomplete="off" placeholder="Colle ta clé ici"', "Sert à calculer tes boucles. Elle reste sur cet appareil.")}
+      <label class="f">Terrain préféré<select id="p-terrain">${[["foot-hiking", "Sentiers et chemins (trail)"], ["foot-walking", "Routes et trottoirs"]].map(([k, t]) => `<option value="${k}" ${(P.terrain || "foot-hiking") === k ? "selected" : ""}>${t}</option>`).join("")}</select></label></div>
     <button class="btn block" type="submit">Enregistrer et recalculer mon plan</button>
     <p class="small muted">Tes données restent dans ton espace : elles ne sont visibles que par toi.</p>
   </form>`;
@@ -968,6 +972,98 @@ function openSheet(html, onMount) {
   sh.addEventListener("click", e => { if (e.target === sh || e.target.closest("[data-close]")) closeSheet(); });
   onMount && onMount(sh);
   const first = sh.querySelector("button, input, select"); first && first.focus({ preventScroll: true });
+}
+/* ============ Parcours en boucle ============ */
+const ROUTE = { seed: 1, data: null, map: null };
+function getPos() {
+  return new Promise((ok, ko) => {
+    if (!navigator.geolocation) return ko(new Error("geo"));
+    navigator.geolocation.getCurrentPosition(p => ok([p.coords.longitude, p.coords.latitude]), ko, { enableHighAccuracy: true, timeout: 15000, maximumAge: 60000 });
+  });
+}
+async function orsLoop(pos, km, seed, profile, key) {
+  let len = km * 1000, best = null;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const r = await fetch(`https://api.openrouteservice.org/v2/directions/${profile}/geojson`, {
+      method: "POST", headers: { "Authorization": key, "Content-Type": "application/json", "Accept": "application/geo+json" },
+      body: JSON.stringify({ coordinates: [pos], elevation: true, instructions: false, options: { round_trip: { length: Math.round(len), points: km < 4 ? 3 : 5, seed } } })
+    });
+    if (!r.ok) { const e = new Error("ors"); e.status = r.status; throw e; }
+    const j = await r.json(); const ft = j.features[0];
+    const dist = ft.properties.summary.distance / 1000;
+    if (!best || Math.abs(dist - km) < Math.abs(best.dist - km)) best = { coords: ft.geometry.coordinates, dist, up: Math.round(ft.properties.ascent || 0), down: Math.round(ft.properties.descent || 0) };
+    if (Math.abs(dist - km) / km < 0.08) break;
+    len *= km / dist;
+  }
+  return best;
+}
+function gpxOf(route, name) {
+  const pts = route.coords.map(c => `<trkpt lat="${c[1].toFixed(6)}" lon="${c[0].toFixed(6)}">${c[2] != null ? `<ele>${c[2].toFixed(1)}</ele>` : ""}</trkpt>`).join("");
+  return `<?xml version="1.0" encoding="UTF-8"?>\n<gpx version="1.1" creator="PLUS LOIN" xmlns="http://www.topografix.com/GPX/1/1"><metadata><name>${esc(name)}</name></metadata><trk><name>${esc(name)}</name><trkseg>${pts}</trkseg></trk></gpx>`;
+}
+function routeSvg(route) {
+  const xs = route.coords.map(c => c[0]), ys = route.coords.map(c => c[1]);
+  const x0 = Math.min(...xs), x1 = Math.max(...xs), y0 = Math.min(...ys), y1 = Math.max(...ys);
+  const k = Math.cos(((y0 + y1) / 2) * Math.PI / 180);
+  const w = (x1 - x0) * k || 1e-6, h = (y1 - y0) || 1e-6, sc = 300 / Math.max(w, h);
+  const P = route.coords.map(c => [10 + ((c[0] - x0) * k) * sc + (300 - w * sc) / 2, 10 + (y1 - c[1]) * sc + (300 - h * sc) / 2]);
+  const d = P.map((p, i) => (i ? "L" : "M") + p[0].toFixed(1) + " " + p[1].toFixed(1)).join("");
+  return `<svg viewBox="0 0 320 320" style="width:100%;max-width:360px;display:block;margin:0 auto;background:rgba(255,255,255,.04);border-radius:14px"><path d="${d}" fill="none" stroke="var(--accent)" stroke-width="3.5" stroke-linejoin="round" stroke-linecap="round"/><circle cx="${P[0][0]}" cy="${P[0][1]}" r="7" fill="#fff" stroke="var(--accent)" stroke-width="3"/><text x="${P[0][0] + 11}" y="${P[0][1] + 4}" fill="#fff" font-size="12" font-weight="700">Départ</text></svg>`;
+}
+function loadLeaflet() {
+  if (window.L) return Promise.resolve(window.L);
+  return new Promise((ok, ko) => {
+    const css = document.createElement("link"); css.rel = "stylesheet"; css.href = "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css"; document.head.appendChild(css);
+    const s = document.createElement("script"); s.src = "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"; s.onload = () => ok(window.L); s.onerror = ko; document.head.appendChild(s);
+  });
+}
+async function drawMap(route) {
+  const box = $("#route-map"); if (!box) return;
+  try {
+    const L = await loadLeaflet();
+    box.innerHTML = ""; box.style.height = "300px";
+    const m = L.map(box, { zoomControl: false, attributionControl: true });
+    L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", { maxZoom: 18, attribution: "© OpenStreetMap" }).addTo(m);
+    const ll = route.coords.map(c => [c[1], c[0]]);
+    const line = L.polyline(ll, { color: "#FF7A45", weight: 5 }).addTo(m);
+    L.circleMarker(ll[0], { radius: 8, color: "#FF7A45", fillColor: "#fff", fillOpacity: 1, weight: 3 }).addTo(m).bindTooltip("Départ", { permanent: true, direction: "right" });
+    m.fitBounds(line.getBounds(), { padding: [20, 20] });
+  } catch (e) { box.innerHTML = routeSvg(route); }
+}
+async function startRun(date, again) {
+  const s = sessionFor(date); const P = S.profile;
+  const head = `<div class="row between"><span class="eyebrow">Lancer mon entraînement</span><button class="iconbtn" type="button" data-close>Fermer</button></div><h2 style="margin:0">${esc(s.title)} · ${s.km} km</h2>`;
+  if (!P.orsKey) { openSheet(`${head}<div class="banner"><span>Pour calculer une boucle, ajoute ta clé OpenRouteService gratuite dans ton profil (rubrique Parcours).</span><button class="btn" type="button" data-nav="profile" data-close style="min-height:36px">Ouvrir le profil</button></div>`); return; }
+  if (!again) ROUTE.seed = 1;
+  openSheet(`${head}<div class="card flat"><div class="row"><span class="spinner"></span><b id="rt-status">Je cherche ta position…</b></div></div>`);
+  let pos;
+  try { pos = ROUTE.pos && again ? ROUTE.pos : await getPos(); ROUTE.pos = pos; }
+  catch (e) { $("#rt-status") && ($("#rt-status").parentNode.innerHTML = `<span>Position introuvable. Autorise la localisation pour ce site dans ton navigateur, puis réessaie.${window.self !== window.top ? " Dans Claude, la localisation est bloquée : utilise le site sur ton téléphone." : ""}</span>`); return; }
+  $("#rt-status") && ($("#rt-status").textContent = "Je calcule une boucle de " + s.km + " km…");
+  let route;
+  try { route = await orsLoop(pos, s.km, ROUTE.seed, P.terrain || "foot-hiking", P.orsKey.trim()); }
+  catch (e) {
+    const msg = e.status === 401 || e.status === 403 ? "Clé refusée : vérifie la clé OpenRouteService dans ton profil." : e.status === 429 ? "Trop de calculs aujourd'hui avec cette clé. Réessaie demain." : e.status ? "Le calcul de la boucle a échoué ici (pas assez de chemins autour de toi ?). Essaie l'autre terrain dans ton profil." : "Impossible de joindre le service de cartographie. Vérifie ta connexion. Dans Claude, cette fonction est bloquée : utilise le site sur ton téléphone.";
+    $("#rt-status") && ($("#rt-status").parentNode.innerHTML = `<span>${msg}</span>`); return;
+  }
+  ROUTE.data = route; ROUTE.date = date;
+  const name = `PLUS LOIN · ${s.title} ${s.km} km · ${fmtDate(date, { day: "numeric", month: "short" })}`;
+  openSheet(`${head}
+    <div id="route-map" style="border-radius:14px;overflow:hidden">${routeSvg(route)}</div>
+    <div class="grid3"><div class="stat"><span class="v num">${route.dist.toFixed(1)}<small>km</small></span><span class="l">Distance</span></div><div class="stat"><span class="v num">${route.up}<small>m</small></span><span class="l">D+</span></div><div class="stat"><span class="v num">${fmtMin(s.min)}</span><span class="l">Durée prévue</span></div></div>
+    <div class="blk main"><b>Au programme</b><p>${esc(s.blocks.map(b => b[1]).join(" "))}</p></div>
+    <div class="grid2"><button class="btn" type="button" data-act="route-gpx">Envoyer vers ma montre (GPX)</button><button class="btn secondary" type="button" data-act="route-again">Autre boucle</button></div>
+    <p class="small muted">Sur ton téléphone, choisis <b>Garmin Connect</b> dans le menu de partage (ou ouvre le fichier téléchargé avec) : le parcours apparaît dans Entraînement › Parcours, puis « Envoyer vers l'appareil ». Sur Strava : Parcours › Importer un GPX.</p>`, () => drawMap(route));
+  ROUTE.name = name;
+}
+async function shareGpx() {
+  if (!ROUTE.data) return;
+  const txt = gpxOf(ROUTE.data, ROUTE.name);
+  const fname = ROUTE.name.replace(/[^\w\d]+/g, "-").replace(/-+$/, "") + ".gpx";
+  const file = new File([txt], fname, { type: "application/gpx+xml" });
+  try { if (navigator.canShare && navigator.canShare({ files: [file] })) { await navigator.share({ files: [file], title: ROUTE.name }); return; } } catch (e) { if (e.name === "AbortError") return; }
+  const a = document.createElement("a"); a.href = URL.createObjectURL(file); a.download = fname; document.body.appendChild(a); a.click(); a.remove();
+  toast("Parcours téléchargé : ouvre-le avec Garmin Connect");
 }
 function closeSheet() { $("#sheet-root").innerHTML = ""; }
 document.addEventListener("keydown", e => { if (e.key === "Escape") closeSheet(); });
@@ -1652,6 +1748,9 @@ document.addEventListener("click", e => {
   else if (a === "manual") manualSheet(t.dataset.date || ($("#log-date") ? $("#log-date").value : TODAY));
   else if (a === "mark-done" || a === "mark-miss") { S.done = S.done || {}; S.done[t.dataset.date] = a === "mark-done" ? "fait" : "non"; persist(); render(); toast(a === "mark-done" ? "Bravo, séance validée" : "Séance notée comme non réalisée"); }
   else if (a === "mark-undo") { if (S.done) delete S.done[t.dataset.date]; persist(); render(); }
+  else if (a === "start-run") startRun(t.dataset.date);
+  else if (a === "route-again") { ROUTE.seed++; startRun(ROUTE.date, true); }
+  else if (a === "route-gpx") shareGpx();
   else if (a === "wprev") { UI.planWeek--; render(); }
   else if (a === "wcur") { UI.planWeek = null; render(); }
   else if (a === "wnext") { UI.planWeek++; render(); }
@@ -1687,7 +1786,7 @@ document.addEventListener("submit", e => {
       toast(`${lab} : ${bad.validationMessage || "valeur incorrecte"}`); return;
     }
     const P = S.profile; const num = ["age", "poids", "taille", "vma", "fcRepos", "fcMax", "kmSemaine", "seances", "distance", "dplus"];
-    ["prenom", "ville", "sexe", "niveau", "course", "raceDate", ...num].forEach(k => { const el = $("#p-" + k); if (el) P[k] = num.includes(k) ? +el.value : el.value.trim(); });
+    ["prenom", "ville", "sexe", "niveau", "course", "raceDate", "orsKey", "terrain", ...num].forEach(k => { const el = $("#p-" + k); if (el) P[k] = num.includes(k) ? +el.value : el.value.trim(); });
     if (+P.fcMax <= +P.fcRepos) { toast("La FC max doit être supérieure à la FC de repos."); return; }
     if (!P.raceDate || P.raceDate <= TODAY) { toast("Choisis une date de course dans le futur."); return; }
     P.example = false; S.logs = S.logs.filter(l => !l.example); S.mcShift = 0; S.plan = buildPlan(P); S.overrides = {}; S.adapt = null; UI.planWeek = null;
