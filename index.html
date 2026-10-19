@@ -12,7 +12,8 @@
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="icon" href="icon-192.png">
 <link rel="apple-touch-icon" href="icon-180.png">
-<style>:root{color-scheme:light;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}body{margin:0;font:14px system-ui,-apple-system,sans-serif}img{max-width:100%}[hidden]{display:none!important}</style>
+<style>:root{color-scheme:light;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}body{margin:0;font:14px system-ui,-apple-system,sans-serif}img{max-width:100%}[hidden]{display:none!important}.f.bad input,.f.bad select{border-color:var(--accent)!important;box-shadow:0 0 0 3px var(--accent-soft)}
+</style>
 </head>
 <body>
 <title>PLUS LOIN</title>
@@ -339,7 +340,7 @@ const PHASE_WHY = {
 function buildPlan(P) {
   const start = mondayOf(TODAY);
   const raceMon = mondayOf(P.raceDate);
-  const nW = clamp(Math.floor(daysBetween(start, raceMon) / 7) + 1, 4, 40);
+  const nW = clamp(Math.floor(daysBetween(start, raceMon) / 7) + 1, 4, 60);
   const lvl = P.niveau || "intermediaire";
   const peakLvl = { novice: 40, debutant: 55, intermediaire: 75, confirme: 95 }[lvl] || 70;
   const kMin = { novice: 6, debutant: 10 }[lvl] || 15;
@@ -925,7 +926,7 @@ function vProfile() {
   const P = S.profile;
   const f = (id, label, type = "number", extra = "", hint = "") => `<label class="f">${label}<input id="p-${id}" type="${type}" value="${esc(P[id])}" ${extra}>${hint ? `<span class="hint">${hint}</span>` : ""}</label>`;
   return `<div class="stack" style="gap:6px"><span class="eyebrow">Ton profil</span><h1>Données personnelles et sportives</h1><p class="muted small">Le plan, les zones cardiaques et les allures sont recalculés à partir de ces données.</p></div>
-  <form id="profile-form" class="stack" style="gap:16px">
+  <form id="profile-form" class="stack" style="gap:16px" novalidate>
     <div class="card"><h3>Toi</h3>
       <div class="grid2">${f("prenom", "Prénom", "text", 'autocomplete="given-name"')}<label class="f">Sexe<select id="p-sexe"><option value="H" ${P.sexe === "H" ? "selected" : ""}>Homme</option><option value="F" ${P.sexe === "F" ? "selected" : ""}>Femme</option></select></label></div>
       ${f("ville", "Ville d'entraînement", "text", 'autocomplete="address-level2" placeholder="ex. Annecy"', "Pour la météo de l'accueil")}
@@ -1620,7 +1621,16 @@ document.addEventListener("click", e => {
 $("#btn-profile").addEventListener("click", () => go("profile"));
 document.addEventListener("submit", e => {
   if (e.target.id === "profile-form") {
-    e.preventDefault(); const P = S.profile; const num = ["age", "poids", "taille", "vma", "fcRepos", "fcMax", "kmSemaine", "seances", "distance", "dplus"];
+    e.preventDefault();
+    // Validation visible : le message natif du navigateur peut rester caché sous l'en-tête ou dans Claude
+    document.querySelectorAll("#profile-form .bad").forEach(x => x.classList.remove("bad"));
+    const bad = [...e.target.querySelectorAll("input,select")].find(x => !x.checkValidity());
+    if (bad) {
+      const lab = bad.closest("label")?.childNodes[0]?.textContent?.trim() || "Un champ";
+      bad.closest("label")?.classList.add("bad"); bad.scrollIntoView({ block: "center", behavior: REDUCED ? "auto" : "smooth" }); bad.focus({ preventScroll: true });
+      toast(`${lab} : ${bad.validationMessage || "valeur incorrecte"}`); return;
+    }
+    const P = S.profile; const num = ["age", "poids", "taille", "vma", "fcRepos", "fcMax", "kmSemaine", "seances", "distance", "dplus"];
     ["prenom", "ville", "sexe", "niveau", "course", "raceDate", ...num].forEach(k => { const el = $("#p-" + k); if (el) P[k] = num.includes(k) ? +el.value : el.value.trim(); });
     if (+P.fcMax <= +P.fcRepos) { toast("La FC max doit être supérieure à la FC de repos."); return; }
     if (!P.raceDate || P.raceDate <= TODAY) { toast("Choisis une date de course dans le futur."); return; }
