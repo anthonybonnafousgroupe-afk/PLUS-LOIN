@@ -1020,7 +1020,7 @@ function ruleAnalysis(date, s, d) {
   else if (note >= 8 && d.rpe != null && d.rpe <= 5) { factor = 1.05; adj.push("Tu encaisses bien : volume des 7 prochains jours augmenté de 5 %."); }
   else adj.push("Prochaines séances maintenues.");
   note = clamp(note, 1, 10);
-  return { id: "l" + Date.now(), date, planned: plannedTitle, source: "manuel",
+  return { id: "l" + Date.now(), date, planned: plannedTitle, source: "manuel", rules: true, rpe: d.rpe || null,
     donnees: { distance_km: d.dist, duree: `${Math.floor(d.dur / 60)}:${String(Math.round(d.dur % 60)).padStart(2, "0")}:00`, allure_moy: pace ? `${Math.floor(pace)}'${String(Math.round((pace % 1) * 60)).padStart(2, "0")}/km` : null, fc_moy: d.fc, fc_max: d.fcm, denivele_pos: d.dp },
     note, verdict: note >= 8 ? "Séance réussie" : note >= 6 ? "Séance correcte" : "Séance à ajuster", resume: d.rpe ? `Analyse automatique à partir de ta saisie (effort ressenti ${d.rpe}/10).` : "Analyse automatique à partir de ton fichier GPS.",
     points_forts: forts, axes_amelioration: axes, respect_consigne: resp, charge: d.rpe == null ? (d.dur >= 120 ? "élevée" : "modérée") : d.rpe >= 8 ? "élevée" : d.rpe >= 6 ? "modérée" : "faible", facteur_prochaines_seances: factor, ajustements: adj, recuperation: d.dur >= 90 ? "Sortie longue : recharge en glucides et protéines dans les 30 minutes, puis routine d'étirements ce soir." : "Hydrate-toi et garde 10 minutes pour la mobilité." };
@@ -1028,9 +1028,64 @@ function ruleAnalysis(date, s, d) {
 function addLog(log) {
   if (!S.profile.example) S.logs = S.logs.filter(l => !l.example);
   S.logs.unshift(log);
-  const f = +log.facteur_prochaines_seances;
-  if (f && f !== 1) S.adapt = { factor: clamp(f, 0.75, 1.1), from: addDays(log.date, 1), until: addDays(log.date, 7), reason: log.verdict };
+  adaptAfter(log);
   persist();
+}
+// Adapte le lendemain et la suite de la semaine selon cette séance et les précédentes
+function adaptAfter(log) {
+  if (log.example || !S.plan) return;
+  const s = sessionFor(log.date, { raw: true });
+  let F = { "faible": -1, "modérée": 0, "élevée": 2, "très élevée": 3 }[log.charge] ?? 0;
+  if (log.respect_consigne === "trop intense") F += 2;
+  if (+log.rpe >= 8) F += 1;
+  if (+log.note <= 5) F += 1;
+  const fAI = +log.facteur_prochaines_seances;
+  if (!log.rules && fAI) F += fAI < 0.9 ? 2 : fAI < 0.97 ? 1 : fAI > 1.03 ? -1 : 0;
+  const dm = String(log.donnees?.duree || "").split(":").map(Number);
+  const dur = dm.length === 3 ? dm[0] * 60 + dm[1] + dm[2] / 60 : 0;
+  if (s && s.min && dur && dur / s.min > 1.25) F += 1;
+  // Les séances des 4 jours précédents comptent aussi
+  S.logs.filter(l => !l.example && l !== log && l.date < log.date && l.date >= addDays(log.date, -4))
+    .forEach(l => { if (["élevée", "très élevée"].includes(l.charge) || l.respect_consigne === "trop intense") F += 1; });
+  const ck = S.checkins[log.date]; if (ck && readiness(ck) < 50) F += 1;
+  const easy = F <= -1 && +log.note >= 8 && log.respect_consigne !== "trop intense";
+  // On repart de zéro pour les jours suivants : les adaptations automatiques précédentes sont recalculées
+  Object.keys(S.overrides).forEach(d => { if (d > log.date && S.overrides[d].auto) delete S.overrides[d]; });
+  const P = S.profile; const lines = []; const when = fmtDate(log.date, { weekday: "long" });
+  const set = (d, type, why) => { S.overrides[d] = { type, raison: `Après ta séance de ${when} : ${why}.`, auto: true, src: log.id }; };
+  let moved = null, softened = false, pushed = false;
+  for (let k = 1; k <= 7; k++) {
+    const d = addDays(log.date, k); if (d < TODAY) continue;
+    const w = weekOf(d); if (!w || d >= S.plan.raceDate) break;
+    const t = sessionFor(d, { raw: true });
+    if (!t || t.type === "repos" || t.type === "renfo" || t.type === "course") continue;
+    const day = k === 1 ? "Demain" : cap(fmtDate(d, { weekday: "long" }));
+    let nt = null, why = "";
+    if (F >= 4) {
+      if (k === 1) { nt = t.i >= 3 || t.type === "mc" ? "repos" : "recup"; why = "fatigue importante, priorité à la récupération"; }
+      else if (t.i >= 3 && !softened) { nt = "ef"; softened = true; why = "intensité retirée le temps de récupérer"; }
+    } else if (F >= 2) {
+      if (k === 1 && t.i >= 3) { nt = "ef"; why = "séance précédente exigeante, l'intensité est décalée"; moved = t; }
+      else if (k === 1 && t.type === "ef") { nt = "recup"; why = "récupération active après une séance exigeante"; }
+      else if (moved && k >= 3 && t.type === "ef" && allowedType(moved.type, P, w)) {
+        const nx = sessionFor(addDays(d, 1), { raw: true });
+        if (!nx || nx.i < 3) { set(d, moved.type, `séance « ${moved.title} » décalée ici`); lines.push(`${day} : ${t.title} → ${moved.title} (séance de qualité décalée).`); moved = null; continue; }
+      }
+    } else if (log.respect_consigne === "trop facile" && t.i >= 3 && !pushed) {
+      set(d, t.type, "la dernière séance de qualité était trop facile, vise le haut de la fourchette d'allure"); pushed = true;
+      lines.push(`${day} : ${t.title} maintenue, en visant le haut de la fourchette d'allure.`); continue;
+    }
+    if (nt && allowedType(nt, P, w)) { set(d, nt, why); lines.push(`${day} : ${t.title} → ${TYPE_META[nt].t} (${why}).`); }
+  }
+  let factor = F >= 4 ? 0.85 : F >= 2 ? 0.92 : easy ? 1.05 : 1;
+  const prevA = S.adapt && S.adapt.until >= addDays(log.date, 1) ? S.adapt : null;
+  if (factor === 1 && prevA && Math.abs(prevA.factor - 1) > 0.03) { factor = Math.round((prevA.factor + 1) / 2 * 100) / 100; lines.push("Séance bien passée : le volume revient progressivement à la normale."); }
+  if (factor !== 1) S.adapt = { factor, from: addDays(log.date, 1), until: addDays(log.date, 7), reason: log.verdict, src: log.id };
+  else S.adapt = null;
+  if (factor < 1) lines.push(`Volume des 7 prochains jours réduit de ${Math.round((1 - factor) * 100)} %.`);
+  else if (factor > 1) lines.push(`Tu encaisses bien : volume des 7 prochains jours augmenté de ${Math.round((factor - 1) * 100)} %.`);
+  if (!lines.length) lines.push("Séance conforme : la suite de la semaine est maintenue.");
+  log.ajustements = lines; log.facteur_prochaines_seances = factor; log.fatigue = F;
 }
 function showAnalysis(log) { const el = $("#analysis"); if (el) { el.innerHTML = analysisCard(log); el.scrollIntoView({ behavior: REDUCED ? "auto" : "smooth", block: "start" }); } }
 function bindDrop() {
@@ -1560,7 +1615,7 @@ document.addEventListener("click", e => {
   else if (a === "wprev") { UI.planWeek--; render(); }
   else if (a === "wnext") { UI.planWeek++; render(); }
   else if (a === "ai-week") aiWeek(t);
-  else if (a === "del-log") { S.logs = S.logs.filter(l => l.id !== t.dataset.id); persist(); closeSheet(); render(); toast("Analyse supprimée"); }
+  else if (a === "del-log") { const id = t.dataset.id; S.logs = S.logs.filter(l => l.id !== id); Object.keys(S.overrides).forEach(d => { if (S.overrides[d].src === id) delete S.overrides[d]; }); if (S.adapt?.src === id) S.adapt = null; persist(); closeSheet(); render(); toast("Analyse supprimée"); }
 });
 $("#btn-profile").addEventListener("click", () => go("profile"));
 document.addEventListener("submit", e => {
