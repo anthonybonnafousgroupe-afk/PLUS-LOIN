@@ -441,11 +441,18 @@ function sessionFor(date, opts = {}) {
   const wsum = running.reduce((a, t) => a + KMW[t], 0) || 1;
   let km = KMW[type] ? w.km * (KMW[type] / wsum) : 0;
   let factor = 1;
-  if (S.adapt && date >= S.adapt.from && date <= S.adapt.until && type !== "course") factor = S.adapt.factor;
+  if (S.adapt && date >= S.adapt.from && date <= S.adapt.until && type !== "course" && KMW[type]) factor = S.adapt.factor;
   km *= factor;
   const phaseIdx = S.plan.weeks.filter(x => x.phase === w.phase);
   const prog = phaseIdx.length > 1 ? phaseIdx.indexOf(w) / (phaseIdx.length - 1) : 0.5;
   let s = makeSession(type, km, w, P, prog);
+  if (ov && ov.light && type === "renfo") {
+    s.min = 20; s.i = 1; s.title = "Renforcement léger";
+    s.blocks = [["Échauffement", "5' de mobilité douce : chevilles, hanches, épaules."],
+      ["Circuit allégé", "1 seule série de chaque exercice du circuit, sans charge ni saut, au rythme lent. Arrête-toi au moindre signe de douleur."],
+      ["Fin", "10' d'étirements doux et de respiration lente."]];
+    s.why = "Après une séance exigeante, on garde le mouvement sans ajouter de fatigue musculaire : les muscles se reconstruisent pendant la récupération.";
+  }
   // Forme du jour
   if (!opts.raw && date === TODAY && S.checkins[TODAY] && type !== "course") {
     const r = readiness(S.checkins[TODAY]);
@@ -710,6 +717,8 @@ function renderNav() {
 }
 function render() {
   if (!S.plan || S.plan.ver !== 3) { S.plan = buildPlan(S.profile); UI.planWeek = null; }
+  // Recalcule l'adaptation de la dernière séance avec le moteur actuel (une seule fois)
+  if (S.adaptV !== 2) { S.adaptV = 2; const last = S.logs.filter(l => !l.example).sort((x, y) => y.date.localeCompare(x.date))[0]; if (last) { adaptAfter(last); persist(); } }
   renderNav();
   const v = $("#view");
   document.body.classList.toggle("is-home", UI.view === "today");
@@ -1063,8 +1072,13 @@ function adaptAfter(log) {
     const d = addDays(log.date, k); if (d < TODAY) continue;
     const w = weekOf(d); if (!w || d >= S.plan.raceDate) break;
     const t = sessionFor(d, { raw: true });
-    if (!t || t.type === "repos" || t.type === "renfo" || t.type === "course") continue;
+    if (!t || t.type === "repos" || t.type === "course") continue;
     const day = k === 1 ? "Demain" : cap(fmtDate(d, { weekday: "long" }));
+    if (t.type === "renfo") {
+      if (F >= 4 && k === 1) { set(d, "repos", "fatigue importante, remplace le renforcement par de la mobilité et des étirements"); lines.push(`${day} : Renforcement → Repos et étirements.`); }
+      else if (F >= 2 && k <= 3 || F >= 4) { set(d, "renfo", "renforcement allégé pour récupérer"); S.overrides[d].light = true; lines.push(`${day} : Renforcement → Renforcement léger (1 série, sans saut).`); }
+      continue;
+    }
     let nt = null, why = "";
     if (F >= 4) {
       if (k === 1) { nt = t.i >= 3 || t.type === "mc" ? "repos" : "recup"; why = "fatigue importante, priorité à la récupération"; }
