@@ -840,6 +840,7 @@ function scoreColor(n) { return n >= 8 ? "var(--good)" : n >= 6 ? "var(--warn)" 
 function vLog() {
   const logs = S.logs.slice().sort((a, b) => b.date.localeCompare(a.date));
   return `<div class="card">
+    ${S.strava?.refresh ? `<div class="row between" style="gap:10px;flex-wrap:wrap"><span class="chip good">Strava connecté${S.strava.athlete ? " · " + esc(S.strava.athlete) : ""}</span><button class="btn secondary" id="strava-sync" type="button" data-act="strava-sync" style="min-height:38px;padding:6px 14px">↻ Synchroniser</button></div><p class="small muted">Tes nouvelles sorties Strava sont importées et analysées automatiquement à l'ouverture de l'appli.</p>` : `<div class="banner"><span><b>Import automatique.</b> Connecte Strava dans ton profil : tes sorties arriveront toutes seules, sans fichier à télécharger.</span><button class="btn" type="button" data-nav="profile" style="min-height:36px;padding:6px 12px">Connecter</button></div>`}
     <span class="eyebrow">Analyse de séance</span><h2>Importe ta sortie</h2>
     <p class="muted small">Le coach lit tes données (distance, allure, FC, dénivelé), note la séance, explique tes points forts et tes axes de progrès, puis adapte tes prochaines séances.</p>
     <div class="drop" id="drop-act"><b>Fichier d'activité (recommandé)</b><span class="small muted">GPX, TCX ou FIT exporté depuis Strava, Garmin, Coros ou Suunto. Données exactes, splits et temps par zone.</span><label class="btn" style="min-height:40px">Choisir un fichier<input type="file" id="actfile" accept=".gpx,.tcx,.fit,.gz,application/gpx+xml,application/octet-stream" hidden></label></div>
@@ -956,6 +957,10 @@ function vProfile() {
     <div class="card"><h3>Objectif</h3>
       ${f("course", "Nom de la course", "text")}
       <div class="grid3">${f("distance", "Distance (km)", "number", 'min="10" max="200"')}${f("dplus", "D+ (m)", "number", 'min="0" max="12000" step="50"')}${f("raceDate", "Date", "date")}</div></div>
+    <div class="card"><h3>Strava</h3>
+      <p class="small muted">Crée ton application sur strava.com/settings/api (domaine de rappel : ${esc(location.hostname || "ton site")}), puis colle ses identifiants ici.</p>
+      <div class="grid2">${f("stravaId", "Client ID", "text", 'autocomplete="off" inputmode="numeric"')}${f("stravaSecret", "Client Secret", "password", 'autocomplete="off"')}</div>
+      ${S.strava?.refresh ? `<div class="row between"><span class="chip good">Connecté${S.strava.athlete ? " · " + esc(S.strava.athlete) : ""}</span><button class="btn ghost" type="button" data-act="strava-off" style="min-height:36px">Déconnecter</button></div>` : `<button class="btn secondary block" type="button" data-act="strava-connect">Connecter Strava</button>`}</div>
     <div class="card"><h3>Parcours</h3>
       ${f("orsKey", "Clé cartographie (OpenRouteService)", "password", 'autocomplete="off" placeholder="Colle ta clé ici"', "Sert à calculer tes boucles. Elle reste sur cet appareil.")}
       <label class="f">Terrain préféré<select id="p-terrain">${[["foot-hiking", "Sentiers et chemins (trail)"], ["foot-walking", "Routes et trottoirs"]].map(([k, t]) => `<option value="${k}" ${(P.terrain || "foot-hiking") === k ? "selected" : ""}>${t}</option>`).join("")}</select></label></div>
@@ -1422,22 +1427,25 @@ function summarize(act) {
 }
 const hms = s => `${Math.floor(s / 3600)}:${String(Math.floor(s % 3600 / 60)).padStart(2, "0")}:${String(Math.round(s % 60)).padStart(2, "0")}`;
 const paceTxt = sPerKm => `${Math.floor(sPerKm / 60)}'${String(Math.round(sPerKm % 60)).padStart(2, "0")}/km`;
-async function analyzeFile(file) {
-  const el = $("#analysis");
-  el.innerHTML = `<div class="card flat"><div class="row"><span class="spinner"></span><b>Lecture de ${esc(file.name)}…</b></div></div>`;
+async function analyzeFile(file, pre) {
+  const el = (!pre && $("#analysis")) || { innerHTML: "", scrollIntoView() {} };
+  const fname = pre ? pre.label : file.name;
+  el.innerHTML = `<div class="card flat"><div class="row"><span class="spinner"></span><b>Lecture de ${esc(fname)}…</b></div></div>`;
   el.scrollIntoView({ behavior: REDUCED ? "auto" : "smooth", block: "nearest" });
   let A;
-  try { A = summarize(await readActivity(file)); }
+  if (pre) A = pre.A;
+  else try { A = summarize(await readActivity(file)); }
   catch (e) { el.innerHTML = `<div class="banner"><span><b>Import impossible.</b> ${esc(e.message || "Fichier non reconnu.")}</span></div>`; return; }
   const date = A.date; const s = sessionFor(date, { raw: true });
   const donnees = { distance_km: A.distKm, duree: hms(A.moving), allure_moy: A.distKm ? paceTxt(A.moving / A.distKm) : null, fc_moy: A.hrAvg, fc_max: A.hrMax, denivele_pos: A.dplus, cadence: A.cad };
   const extra = { zones: A.zones, splits: A.splits, start: A.start, elapsed: hms(A.elapsed), dminus: A.dminus };
+  if (pre && pre.stravaId) extra.stravaId = pre.stravaId;
   const existing = S.logs.find(l => l.start && l.start === A.start);
   let log;
   if (SAMPLE) {
     el.innerHTML = `<div class="card flat"><div class="row"><span class="spinner"></span><b>Fichier lu : ${A.distKm} km, ${donnees.duree}. Le coach analyse ta séance…</b></div></div>`;
     const ck = S.checkins[date];
-    const prompt = `Tu es un entraîneur expert en course à pied et en ultra-trail, exigeant mais bienveillant. Tu tutoies l'athlète. Voici les données EXACTES d'une séance, calculées depuis le fichier GPS (${file.name}).
+    const prompt = `Tu es un entraîneur expert en course à pied et en ultra-trail, exigeant mais bienveillant. Tu tutoies l'athlète. Voici les données EXACTES d'une séance, calculées depuis le fichier GPS (${fname}).
 ${profileTxt()}
 Séance prévue ce jour-là (${date}) : ${sessionTxt(s)}.
 Forme ce jour-là : ${ck ? readiness(ck) + "/100" : "non renseignée"}.
@@ -1456,11 +1464,80 @@ Réponds UNIQUEMENT avec un objet JSON valide, sans texte autour : {"note": enti
   }
   if (!log) {
     log = ruleAnalysis(date, s, { dist: A.distKm, dur: A.moving / 60, fc: A.hrAvg, fcm: A.hrMax, dp: A.dplus, rpe: null });
-    Object.assign(log, { source: "fichier", donnees }, extra);
+    Object.assign(log, { source: pre ? "strava" : "fichier", donnees }, extra);
     if (A.zones && s && s.zone && s.zone <= 2) { const hi = A.zones[2] + A.zones[3] + A.zones[4]; if (hi > 25) log.axes_amelioration.push(`${hi} % du temps au-dessus de la zone 2 : en endurance, vise moins de 10 %.`); else log.points_forts.push(`${A.zones[0] + A.zones[1]} % du temps en zones 1–2 : intensité bien contrôlée.`); }
   }
   if (existing) S.logs = S.logs.filter(l => l !== existing);
-  addLog(log); render(); showAnalysis(log); toast(existing ? "Séance mise à jour" : "Séance importée et analysée");
+  if (pre) log.source = "strava";
+  addLog(log);
+  if (pre) return log;
+  render(); showAnalysis(log); toast(existing ? "Séance mise à jour" : "Séance importée et analysée");
+}
+
+/* ============ Strava : connexion et synchro automatique ============ */
+const STRAVA_TYPES = ["Run", "TrailRun", "VirtualRun", "Walk", "Hike"];
+const inFrame = () => { try { return window.self !== window.top; } catch (e) { return true; } };
+const redirectUri = () => location.origin + location.pathname;
+function stravaConnect() {
+  const P = S.profile;
+  const id = ($("#p-stravaId")?.value || P.stravaId || "").trim(), sec = ($("#p-stravaSecret")?.value || P.stravaSecret || "").trim();
+  if (!id || !sec) { toast("Renseigne d'abord le Client ID et le Client Secret Strava."); return; }
+  if (inFrame() || location.protocol === "file:") { toast("La connexion Strava se fait depuis le site sur ton téléphone, pas dans Claude."); return; }
+  P.stravaId = id; P.stravaSecret = sec; persist();
+  location.href = `https://www.strava.com/oauth/authorize?client_id=${encodeURIComponent(id)}&redirect_uri=${encodeURIComponent(redirectUri())}&response_type=code&approval_prompt=auto&scope=read,activity:read_all&state=plusloin`;
+}
+async function stravaToken(body) {
+  const P = S.profile;
+  const r = await fetch("https://www.strava.com/oauth/token", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(Object.assign({ client_id: P.stravaId, client_secret: P.stravaSecret }, body)) });
+  if (!r.ok) { const e = new Error("token"); e.status = r.status; throw e; }
+  const j = await r.json();
+  S.strava = Object.assign(S.strava || {}, { access: j.access_token, refresh: j.refresh_token, expires: j.expires_at }, j.athlete ? { athlete: j.athlete.firstname || "" } : {});
+  persist(); return S.strava.access;
+}
+async function stravaAccess() {
+  const st = S.strava; if (!st || !st.refresh) return null;
+  if (st.access && st.expires > Date.now() / 1000 + 120) return st.access;
+  return stravaToken({ grant_type: "refresh_token", refresh_token: st.refresh });
+}
+async function stravaApi(path) {
+  const tok = await stravaAccess(); if (!tok) throw new Error("not connected");
+  const r = await fetch("https://www.strava.com/api/v3" + path, { headers: { Authorization: "Bearer " + tok } });
+  if (!r.ok) { const e = new Error("api"); e.status = r.status; throw e; }
+  return r.json();
+}
+async function stravaCallback() {
+  const q = new URLSearchParams(location.search);
+  if (q.get("state") !== "plusloin") return;
+  history.replaceState(null, "", redirectUri());
+  if (q.get("error") || !q.get("code")) { toast("Connexion Strava annulée."); return; }
+  try { await stravaToken({ code: q.get("code"), grant_type: "authorization_code" }); S.strava.since = Math.floor(Date.now() / 1000) - 7 * 86400; persist(); toast("Strava connecté !"); go("log"); stravaSync(true); }
+  catch (e) { toast(e.status === 400 || e.status === 401 ? "Strava a refusé la connexion : vérifie le Client ID et le Secret." : "Connexion Strava impossible pour l'instant."); }
+}
+let SYNCING = false;
+async function stravaSync(manual) {
+  if (SYNCING || !S.strava?.refresh) return;
+  if (!manual && S.strava.last && Date.now() - S.strava.last < 10 * 60 * 1000) return;
+  SYNCING = true; const btn = $("#strava-sync"); if (btn) btn.innerHTML = `<span class="spinner"></span>Synchronisation…`;
+  let n = 0;
+  try {
+    const after = S.strava.since || Math.floor(Date.now() / 1000) - 7 * 86400;
+    const list = await stravaApi(`/athlete/activities?after=${after}&per_page=30`);
+    const todo = list.filter(a => STRAVA_TYPES.includes(a.sport_type || a.type) && !S.logs.some(l => l.stravaId === a.id)).sort((a, b) => a.start_date.localeCompare(b.start_date));
+    for (const a of todo) {
+      const st = await stravaApi(`/activities/${a.id}/streams?keys=time,distance,heartrate,altitude,cadence,latlng&key_by_type=true`);
+      const t0 = Date.parse(a.start_date), T = st.time?.data || [];
+      const pts = T.map((s, k) => ({ t: t0 + s * 1000, dist: st.distance?.data[k], hr: st.heartrate?.data[k], ele: st.altitude?.data[k], cad: st.cadence?.data[k], lat: st.latlng?.data[k]?.[0], lon: st.latlng?.data[k]?.[1] }));
+      let A; try { A = summarize({ name: a.name, pts }); } catch (e) { continue; }
+      A.date = a.start_date_local.slice(0, 10);
+      await analyzeFile(null, { A, label: `Strava · ${a.name}`, stravaId: a.id }); n++;
+    }
+    S.strava.last = Date.now();
+    if (list.length) S.strava.since = Math.max(after, Math.floor(Math.max(...list.map(a => Date.parse(a.start_date))) / 1000));
+    persist();
+    if (n || manual) toast(n ? `${n} sortie${n > 1 ? "s" : ""} Strava importée${n > 1 ? "s" : ""} et analysée${n > 1 ? "s" : ""}` : "Aucune nouvelle sortie sur Strava");
+  } catch (e) {
+    if (manual || e.status === 401) toast(e.status === 401 ? "Accès Strava expiré : reconnecte Strava depuis ton profil." : e.status === 429 ? "Strava limite les requêtes : réessaie dans 15 minutes." : "Synchro Strava impossible (connexion ?).");
+  } finally { SYNCING = false; render(); }
 }
 
 /* ============ Accueil ============ */
@@ -1749,6 +1826,9 @@ document.addEventListener("click", e => {
   else if (a === "mark-done" || a === "mark-miss") { S.done = S.done || {}; S.done[t.dataset.date] = a === "mark-done" ? "fait" : "non"; persist(); render(); toast(a === "mark-done" ? "Bravo, séance validée" : "Séance notée comme non réalisée"); }
   else if (a === "mark-undo") { if (S.done) delete S.done[t.dataset.date]; persist(); render(); }
   else if (a === "start-run") startRun(t.dataset.date);
+  else if (a === "strava-connect") stravaConnect();
+  else if (a === "strava-sync") stravaSync(true);
+  else if (a === "strava-off") { S.strava = null; persist(); render(); toast("Strava déconnecté"); }
   else if (a === "route-again") { ROUTE.seed++; startRun(ROUTE.date, true); }
   else if (a === "route-gpx") shareGpx();
   else if (a === "wprev") { UI.planWeek--; render(); }
@@ -1786,7 +1866,7 @@ document.addEventListener("submit", e => {
       toast(`${lab} : ${bad.validationMessage || "valeur incorrecte"}`); return;
     }
     const P = S.profile; const num = ["age", "poids", "taille", "vma", "fcRepos", "fcMax", "kmSemaine", "seances", "distance", "dplus"];
-    ["prenom", "ville", "sexe", "niveau", "course", "raceDate", "orsKey", "terrain", ...num].forEach(k => { const el = $("#p-" + k); if (el) P[k] = num.includes(k) ? +el.value : el.value.trim(); });
+    ["prenom", "ville", "sexe", "niveau", "course", "raceDate", "orsKey", "terrain", "stravaId", "stravaSecret", ...num].forEach(k => { const el = $("#p-" + k); if (el) P[k] = num.includes(k) ? +el.value : el.value.trim(); });
     if (+P.fcMax <= +P.fcRepos) { toast("La FC max doit être supérieure à la FC de repos."); return; }
     if (!P.raceDate || P.raceDate <= TODAY) { toast("Choisis une date de course dans le futur."); return; }
     P.example = false; S.logs = S.logs.filter(l => !l.example); S.mcShift = 0; S.plan = buildPlan(P); S.overrides = {}; S.adapt = null; UI.planWeek = null;
@@ -1798,6 +1878,8 @@ document.addEventListener("submit", e => {
 render();
 requestAnimationFrame(animLoop);
 connectAI();
+stravaCallback().then(() => stravaSync(false));
+document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") stravaSync(false); });
 connectDb();
 </script>
 
