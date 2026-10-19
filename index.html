@@ -316,7 +316,7 @@ async function connectDb() {
     const snap = await DOCREF.get();
     if (snap.exists) {
       const st = JSON.parse(snap.data().state || "null");
-      if (st && st.v === 1) { S = st; if (!S.plan || S.plan.ver !== 2) S.plan = buildPlan(S.profile); store.set("plusloin.state", S); render(); }
+      if (st && st.v === 1) { S = st; if (!S.plan || S.plan.ver !== 3) S.plan = buildPlan(S.profile); store.set("plusloin.state", S); render(); }
     } else { persist(); }
   } catch (e) { /* sauvegarde locale seulement */ }
 }
@@ -372,7 +372,7 @@ function buildPlan(P) {
     else { phase = "Course"; km = maxBuild * 0.3; dp = 0; }
     weeks.push({ i, start: ws, phase, km: Math.round(km), dplus: Math.round(dp / 10) * 10, rec });
   }
-  return { start, raceDate: P.raceDate, weeks, created: TODAY, ver: 2, lvl };
+  return { start, raceDate: P.raceDate, weeks, created: TODAY, ver: 3, lvl };
 }
 function weekOf(date) {
   if (!S.plan) return null;
@@ -709,7 +709,7 @@ function renderNav() {
   $("#profile-label").textContent = S.profile.prenom || "Profil";
 }
 function render() {
-  if (!S.plan || S.plan.ver !== 2) S.plan = buildPlan(S.profile);
+  if (!S.plan || S.plan.ver !== 3) S.plan = buildPlan(S.profile);
   renderNav();
   const v = $("#view");
   document.body.classList.toggle("is-home", UI.view === "today");
