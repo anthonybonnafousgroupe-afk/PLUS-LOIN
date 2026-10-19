@@ -342,10 +342,13 @@ function buildPlan(P) {
   const raceMon = mondayOf(P.raceDate);
   const nW = clamp(Math.floor(daysBetween(start, raceMon) / 7) + 1, 4, 60);
   const lvl = P.niveau || "intermediaire";
-  const peakLvl = { novice: 40, debutant: 55, intermediaire: 75, confirme: 95 }[lvl] || 70;
+  // Pic de volume visé : dépend de la course (distance + dénivelé), plafonné selon le niveau
+  const dEff = (+P.distance || 30) + (+P.dplus || 0) / 100;
+  const need = dEff <= 50 ? 15 + dEff * 0.8 : 35 + dEff * 0.45;
+  const peakLvl = Math.min(need, { novice: 45, debutant: 65, intermediaire: 90, confirme: 110 }[lvl] || 85);
   const kMin = { novice: 6, debutant: 10 }[lvl] || 15;
   const k0 = clamp(+P.kmSemaine || 0, kMin, lvl === "novice" ? 10 : 140);
-  const peak = Math.max(k0 * 1.05, Math.min(peakLvl, k0 * 2.2));
+  const peak = Math.max(k0 * 1.05, peakLvl);
   const taper = nW >= 10 ? 2 : 1;
   const build = nW - taper;
   const baseShare = { novice: 0.5, debutant: 0.45 }[lvl] || 0.35;
@@ -395,7 +398,7 @@ function pattern(w, n, P) {
     const walk = mcStep(w.i) <= 7;
     const run = walk ? "mc" : "ef";
     let q = run;
-    if (!walk && w.i >= 12 && !w.rec) q = w.phase === "Spécifique" ? "trail" : w.phase === "Base" ? "ef" : "fartlek";
+    if (!walk && w.i >= 12 && !w.rec) q = w.phase === "Spécifique" ? ((+P.dplus || 0) / (+P.distance || 1) >= 15 ? "trail" : "fartlek") : w.phase === "Base" ? "ef" : "fartlek";
     return ["repos", run, "renfo", q, "repos", "repos", walk ? "mc" : "sl"];
   }
   if (lvl === "debutant") {
@@ -480,7 +483,7 @@ function makeSession(type, km, w, P, prog) {
       s.why = "Première approche du rythme sans se mettre dans le rouge : le cœur et les jambes découvrent des allures plus vives en douceur."; break; }
     case "ef": {
       const nov = P.niveau === "novice";
-      s.min = clamp(efMin(km), nov ? 20 : P.niveau === "debutant" ? 25 : 30, nov ? 60 : 95); s.km = +(s.min / 60 * V * 0.68).toFixed(1); s.zone = 2;
+      s.min = clamp(efMin(km), nov ? 20 : P.niveau === "debutant" ? 25 : 30, nov ? 75 : 95); s.km = +(s.min / 60 * V * 0.68).toFixed(1); s.zone = 2;
       s.blocks = [["Course continue", nov ? `${fmtMin(s.min)} à allure très facile (${zoneTxt(P, 2)}). Tu dois pouvoir parler en phrases complètes. Marche 1' dès que tu en as besoin.` : `${fmtMin(s.min)} en zone 2 (${zoneTxt(P, 2)}), allure ${paceR(P, .65, .72)}. Tu dois pouvoir parler en phrases complètes.`]];
       if (w.rec || w.phase === "Affûtage") s.blocks.push(["Lignes droites", "En fin de séance : 4 × 80 m progressifs, récupération en marchant. Foulée relâchée, buste droit."]);
       if (+P.seances >= 5) s.blocks.push(["Gainage", "15 minutes après la séance : planche, gainage latéral, pont fessier (voir Exercices)."]);
