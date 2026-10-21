@@ -1208,7 +1208,7 @@ async function startRun(date, again) {
     <div class="grid3"><div class="stat"><span class="v num">${route.dist.toFixed(1)}<small>km</small></span><span class="l">Distance</span></div><div class="stat"><span class="v num">${route.up}<small>m</small></span><span class="l">D+</span></div><div class="stat"><span class="v num">${fmtMin(s.min)}</span><span class="l">Durée prévue</span></div></div>
     <div class="blk main"><b>Au programme</b><p>${esc(s.blocks.map(b => b[1]).join(" "))}</p></div>
     <div class="grid2"><button class="btn" type="button" data-act="route-gpx">Envoyer vers ma montre (GPX)</button><button class="btn secondary" type="button" data-act="route-again">Autre boucle</button></div>
-    <p class="small muted">Sur ton téléphone, choisis <b>Garmin Connect</b> dans le menu de partage (ou ouvre le fichier téléchargé avec) : le parcours apparaît dans Entraînement › Parcours, puis « Envoyer vers l'appareil ». Sur Strava : Parcours › Importer un GPX.</p>`, () => drawMap(route));
+    <p class="small muted">Sur ton téléphone, choisis <b>Garmin Connect</b> dans le menu de partage (ou ouvre le fichier téléchargé avec) : le parcours apparaît dans Entraînement › Parcours, puis « Envoyer vers l'appareil ». Sur Strava : Parcours › Importer un GPX.</p>${/iPhone|iPad|iPod/.test(navigator.userAgent) ? `<p class="small muted"><b>Apple Watch :</b> dans le menu de partage, choisis une app de navigation compatible montre (par ex. <b>WorkOutDoors</b> ou <b>Footpath</b>). Le parcours s'ouvre dans l'app iPhone, puis s'affiche sur ta montre avec le guidage pendant la course.</p>` : ""}`, () => drawMap(route));
   ROUTE.name = name;
 }
 async function shareGpx() {
