@@ -1050,7 +1050,7 @@ function vProfile() {
       <div class="grid2">${f("stravaId", "Client ID", "text", 'autocomplete="off" inputmode="numeric"')}${f("stravaSecret", "Client Secret", "password", 'autocomplete="off"')}</div>
       ${S.strava?.refresh ? `<div class="row between"><span class="chip good">Connecté${S.strava.athlete ? " · " + esc(S.strava.athlete) : ""}</span><button class="btn ghost" type="button" data-act="strava-off" style="min-height:36px">Déconnecter</button></div>` : `<button class="btn secondary block" type="button" data-act="strava-connect">Connecter Strava</button>`}</div>
     <div class="card"><h3>Parcours</h3>
-      ${f("orsKey", "Clé cartographie (OpenRouteService)", "password", 'autocomplete="off" placeholder="Colle ta clé ici"', "Sert à calculer tes boucles. Elle reste sur cet appareil.")}
+      ${typeof APP_CFG !== "undefined" && APP_CFG.orsKey ? `<p class="small muted">Calcul des boucles activé automatiquement ✓</p>` : f("orsKey", "Clé cartographie (OpenRouteService)", "password", 'autocomplete="off" placeholder="Colle ta clé ici"', "Sert à calculer tes boucles. Elle reste sur cet appareil.")}
       <label class="f">Terrain préféré<select id="p-terrain">${[["foot-hiking", "Sentiers et chemins (trail)"], ["foot-walking", "Routes et trottoirs"]].map(([k, t]) => `<option value="${k}" ${(P.terrain || "foot-hiking") === k ? "selected" : ""}>${t}</option>`).join("")}</select></label></div>
     <button class="btn block" type="submit">Enregistrer et recalculer mon plan</button>
     ${FB && FB.auth.currentUser ? `<div class="row between" style="gap:10px"><span class="small muted">Connecté : ${esc(FB.auth.currentUser.email || "")}</span><button class="btn ghost" type="button" data-act="logout" style="min-height:36px">Se déconnecter</button></div>` : ""}
@@ -1127,7 +1127,7 @@ async function drawMap(route) {
 async function startRun(date, again) {
   const s = sessionFor(date); const P = S.profile;
   const head = `<div class="row between"><span class="eyebrow">Lancer mon entraînement</span><button class="iconbtn" type="button" data-close>Fermer</button></div><h2 style="margin:0">${esc(s.title)} · ${s.km} km</h2>`;
-  if (!P.orsKey) { openSheet(`${head}<div class="banner"><span>Pour calculer une boucle, ajoute ta clé OpenRouteService gratuite dans ton profil (rubrique Parcours).</span><button class="btn" type="button" data-nav="profile" data-close style="min-height:36px">Ouvrir le profil</button></div>`); return; }
+  if (!orsKey()) { openSheet(`${head}<div class="banner"><span>Pour calculer une boucle, ajoute ta clé OpenRouteService gratuite dans ton profil (rubrique Parcours).</span><button class="btn" type="button" data-nav="profile" data-close style="min-height:36px">Ouvrir le profil</button></div>`); return; }
   if (!again) ROUTE.seed = 1;
   openSheet(`${head}<div class="card flat"><div class="row"><span class="spinner"></span><b id="rt-status">Je cherche ta position…</b></div></div>`);
   let pos;
@@ -1135,7 +1135,7 @@ async function startRun(date, again) {
   catch (e) { $("#rt-status") && ($("#rt-status").parentNode.innerHTML = `<span>Position introuvable. Autorise la localisation pour ce site dans ton navigateur, puis réessaie.${window.self !== window.top ? " Dans Claude, la localisation est bloquée : utilise le site sur ton téléphone." : ""}</span>`); return; }
   $("#rt-status") && ($("#rt-status").textContent = "Je calcule une boucle de " + s.km + " km…");
   let route;
-  try { route = await orsLoop(pos, s.km, ROUTE.seed, P.terrain || "foot-hiking", P.orsKey.trim()); }
+  try { route = await orsLoop(pos, s.km, ROUTE.seed, P.terrain || "foot-hiking", orsKey()); }
   catch (e) {
     const msg = e.status === 401 || e.status === 403 ? "Clé refusée : vérifie la clé OpenRouteService dans ton profil." : e.status === 429 ? "Trop de calculs aujourd'hui avec cette clé. Réessaie demain." : e.status ? "Le calcul de la boucle a échoué ici (pas assez de chemins autour de toi ?). Essaie l'autre terrain dans ton profil." : "Impossible de joindre le service de cartographie. Vérifie ta connexion. Dans Claude, cette fonction est bloquée : utilise le site sur ton téléphone.";
     $("#rt-status") && ($("#rt-status").parentNode.innerHTML = `<span>${msg}</span>`); return;
@@ -1639,7 +1639,10 @@ async function icuSync(manual) {
   } finally { ICU_SYNCING = false; render(); }
 }
 /* ============ Compte : inscription e-mail + mot de passe (Firebase, site uniquement) ============ */
-let FB = null, AUTH_MODE = "signup";
+let FB = null, AUTH_MODE = "signup", APP_CFG = {};
+// Réglages partagés de l'appli (clé cartographie…), lisibles par les utilisateurs connectés uniquement
+async function loadAppConfig() { try { const s = await FB.db.doc("config/app").get(); APP_CFG = s.exists ? s.data() || {} : {}; } catch (e) { APP_CFG = {}; } }
+const orsKey = () => ((S.profile.orsKey || "").trim() || (APP_CFG.orsKey || "").trim());
 const AUTH_ERR = { "auth/email-already-in-use": "Un compte existe déjà avec cet e-mail : connecte-toi.", "auth/invalid-email": "Adresse e-mail invalide.", "auth/weak-password": "Mot de passe trop court (6 caractères minimum).", "auth/invalid-credential": "E-mail ou mot de passe incorrect.", "auth/wrong-password": "E-mail ou mot de passe incorrect.", "auth/user-not-found": "Aucun compte avec cet e-mail.", "auth/too-many-requests": "Trop d'essais : réessaie dans quelques minutes.", "auth/network-request-failed": "Pas de connexion internet." };
 function loadScript(src) { return new Promise((ok, ko) => { const s = document.createElement("script"); s.src = src; s.onload = ok; s.onerror = ko; document.head.appendChild(s); }); }
 function authView(msg) {
@@ -1682,6 +1685,7 @@ async function initAuth() {
       }
       S.uid = u.uid; S.email = u.email; persist();
     } catch (e) { toast("Données en ligne indisponibles : tes données restent sur ce téléphone."); }
+    await loadAppConfig();
     $("#auth-root").innerHTML = ""; render();
     if (S.profile.example) { toast("Bienvenue ! Commence par remplir ton profil."); go("profile"); }
     icuSync(false); stravaSync(false);
