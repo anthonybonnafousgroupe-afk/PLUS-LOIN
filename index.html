@@ -778,11 +778,11 @@ function aiError(e) {
 /* IA sur le site : Gemini via Firebase AI Logic (pas de clé à exposer, l'accès passe par le projet Firebase) */
 function geminiSample() {
   const C = window.PL_FIREBASE; if (!C || !C.projectId) return null;
-  const url = t => `https://firebasevertexai.googleapis.com/v1beta/projects/${C.projectId}/models/${APP_CFG.aiModel || "gemini-2.5-flash"}:${t}`;
+  const url = t => `https://firebasevertexai.googleapis.com/v1beta/projects/${C.projectId}/models/${APP_CFG.aiModel || "gemini-flash-latest"}:${t}`;
   const hdr = { "Content-Type": "application/json", "x-goog-api-key": C.apiKey, "x-firebase-appid": C.appId || "" };
   const b64 = blob => new Promise((ok, ko) => { const f = new FileReader(); f.onload = () => ok(String(f.result).split(",")[1]); f.onerror = ko; f.readAsDataURL(blob); });
   const fail = async res => { let m = ""; try { m = (await res.json()).error?.message || ""; } catch (e) {} const err = new Error(m || "HTTP " + res.status); err.code = res.status === 429 ? "rate_limited" : /SERVICE_DISABLED|has not been used|disabled/i.test(m) ? "ai_off" : "ai_error"; throw err; };
-  const textOf = j => (j.candidates?.[0]?.content?.parts || []).map(x => x.text || "").join("");
+  const textOf = j => (j.candidates?.[0]?.content?.parts || []).filter(x => !x.thought).map(x => x.text || "").join("");
   async function gen(body, onText) {
     if (!onText) { const res = await fetch(url("generateContent"), { method: "POST", headers: hdr, body: JSON.stringify(body) }); if (!res.ok) await fail(res); return textOf(await res.json()); }
     const res = await fetch(url("streamGenerateContent") + "?alt=sse", { method: "POST", headers: hdr, body: JSON.stringify(body) }); if (!res.ok) await fail(res);
