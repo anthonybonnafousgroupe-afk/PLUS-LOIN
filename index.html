@@ -1111,11 +1111,28 @@ function openSheet(html, onMount) {
 }
 /* ============ Parcours en boucle ============ */
 const ROUTE = { seed: 1, data: null, map: null };
-function getPos() {
+function getPos1(high, timeout, maximumAge) {
   return new Promise((ok, ko) => {
-    if (!navigator.geolocation) return ko(new Error("geo"));
-    navigator.geolocation.getCurrentPosition(p => ok([p.coords.longitude, p.coords.latitude]), ko, { enableHighAccuracy: true, timeout: 15000, maximumAge: 60000 });
+    if (!navigator.geolocation) return ko({ code: 0 });
+    navigator.geolocation.getCurrentPosition(p => ok([p.coords.longitude, p.coords.latitude]), ko, { enableHighAccuracy: high, timeout, maximumAge });
   });
+}
+/* GPS précis d'abord ; si l'iPhone met trop de temps, on retente en précision réduite */
+async function getPos() {
+  try { return await getPos1(true, 20000, 60000); }
+  catch (e) { if (e && e.code === 1) throw e; return await getPos1(false, 15000, 10 * 60e3); }
+}
+async function geocodeAddr(q) {
+  const r = await fetch(`https://api.openrouteservice.org/geocode/search?api_key=${encodeURIComponent(orsKey())}&text=${encodeURIComponent(q)}&size=1`);
+  const j = await r.json(); const f = j.features && j.features[0];
+  if (!f) throw new Error("addr");
+  return f.geometry.coordinates;
+}
+function geoErrTxt(e) {
+  const ios = /iPhone|iPad|iPod/.test(navigator.userAgent);
+  if (window.self !== window.top) return "Dans Claude, la localisation est bloquée : utilise le site sur ton téléphone, ou indique ton point de départ ci-dessous.";
+  if (e && e.code === 1) return ios ? "La localisation est refusée pour ce site. Sur iPhone : Réglages › Confidentialité et sécurité › Service de localisation (activé) › Sites web Safari › « Lorsque l'app est active ». Puis dans Safari, touche « aA » › Réglages du site web › Localisation › Autoriser. Ou indique ton point de départ ci-dessous." : "La localisation est refusée pour ce site. Autorise-la dans les réglages du navigateur, ou indique ton point de départ ci-dessous.";
+  return "Ton téléphone n'a pas trouvé ta position à temps (intérieur, GPS faible). Réessaie dehors, ou indique ton point de départ ci-dessous.";
 }
 async function orsLoop(pos, km, seed, profile, key) {
   let len = km * 1000, best = null;
@@ -1170,11 +1187,13 @@ async function startRun(date, again) {
   const s = sessionFor(date); const P = S.profile;
   const head = `<div class="row between"><span class="eyebrow">Lancer mon entraînement</span><button class="iconbtn" type="button" data-close>Fermer</button></div><h2 style="margin:0">${esc(s.title)} · ${s.km} km</h2>`;
   if (!orsKey()) { openSheet(`${head}<div class="banner"><span>Pour calculer une boucle, ajoute ta clé OpenRouteService gratuite dans ton profil (rubrique Parcours).</span><button class="btn" type="button" data-nav="profile" data-close style="min-height:36px">Ouvrir le profil</button></div>`); return; }
-  if (!again) ROUTE.seed = 1;
+  if (!again) { ROUTE.seed = 1; ROUTE.pos = null; } ROUTE.date = date;
   openSheet(`${head}<div class="card flat"><div class="row"><span class="spinner"></span><b id="rt-status">Je cherche ta position…</b></div></div>`);
   let pos;
   try { pos = ROUTE.pos && again ? ROUTE.pos : await getPos(); ROUTE.pos = pos; }
-  catch (e) { $("#rt-status") && ($("#rt-status").parentNode.innerHTML = `<span>Position introuvable. Autorise la localisation pour ce site dans ton navigateur, puis réessaie.${window.self !== window.top ? " Dans Claude, la localisation est bloquée : utilise le site sur ton téléphone." : ""}</span>`); return; }
+  catch (e) { $("#rt-status") && ($("#rt-status").closest(".card").outerHTML = `<div class="banner"><span>${esc(geoErrTxt(e))}</span></div>
+    <div class="card flat"><label class="f"><span>Point de départ (adresse ou ville)</span><input id="rt-addr" autocomplete="street-address" value="${esc(P.ville || "")}" placeholder="ex. 12 rue du Lac, Annecy"></label>
+    <div class="row" style="gap:8px"><button class="btn" type="button" data-act="route-addr">Partir de cette adresse</button><button class="btn secondary" type="button" data-act="start-run" data-date="${date}">Réessayer le GPS</button></div><span class="small muted" id="rt-addr-err"></span></div>`); return; }
   $("#rt-status") && ($("#rt-status").textContent = "Je calcule une boucle de " + s.km + " km…");
   let route;
   try { route = await orsLoop(pos, s.km, ROUTE.seed, P.terrain || "foot-hiking", orsKey()); }
@@ -2102,6 +2121,7 @@ document.addEventListener("click", e => {
   else if (a === "icu-sync") icuSync(true);
   else if (a === "logout") authLogout();
   else if (a === "strava-off") { S.strava = null; persist(); render(); toast("Strava déconnecté"); }
+  else if (a === "route-addr") { const q = ($("#rt-addr") ? $("#rt-addr").value : "").trim(); const er = $("#rt-addr-err"); if (!q) { er && (er.textContent = "Indique une adresse ou une ville."); return; } t.disabled = true; er && (er.textContent = "Recherche de l'adresse…"); geocodeAddr(q).then(pos => { ROUTE.pos = pos; startRun(ROUTE.date, true); }).catch(() => { t.disabled = false; er && (er.textContent = "Adresse introuvable. Essaie avec la ville ou une rue plus précise."); }); }
   else if (a === "route-again") { ROUTE.seed++; startRun(ROUTE.date, true); }
   else if (a === "route-gpx") shareGpx();
   else if (a === "wprev") { UI.planWeek--; render(); }
