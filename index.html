@@ -155,6 +155,14 @@ svg.fig{width:100%;height:auto;display:block}
 .tabs button{border:1px solid var(--line);background:rgba(255,255,255,.05);border-radius:999px;padding:7px 14px;font-weight:700;font-size:13px;white-space:nowrap}
 .tabs button[aria-pressed="true"]{background:var(--ink);color:var(--bg);border-color:var(--ink)}
 /* Sheet */
+.auth{position:fixed;inset:0;z-index:80;display:flex;align-items:center;justify-content:center;padding:24px 16px;background:radial-gradient(120% 80% at 50% 0%,rgba(6,18,43,.35),rgba(3,11,28,.88))}
+.auth .box{width:100%;max-width:400px;background:rgba(14,34,71,.72);backdrop-filter:blur(18px);-webkit-backdrop-filter:blur(18px);border:1px solid var(--line);border-radius:22px;padding:26px 20px;display:flex;flex-direction:column;gap:14px}
+.auth .logo{font-family:var(--f-display);font-weight:300;letter-spacing:.35em;font-size:28px;text-align:center;color:#fff}
+.auth .tabs{display:grid;grid-template-columns:1fr 1fr;gap:6px;background:rgba(255,255,255,.05);border-radius:12px;padding:4px}
+.auth .tabs button{border-radius:9px;padding:9px;font-weight:700;color:var(--ink-2)}
+.auth .tabs button.on{background:var(--accent);color:#1a0d05}
+.auth .err{color:#FFB4A0;font-size:13px;min-height:1em}
+.auth .link{color:var(--accent-2);font-size:13px;text-decoration:underline;align-self:center}
 .sheet{position:fixed;inset:0;z-index:50;background:rgba(10,16,14,.55);display:flex;align-items:flex-end;justify-content:center}
 .sheet .panel{background:linear-gradient(180deg,#0E2247,#06122B);border-top:1px solid var(--line);width:100%;max-width:580px;max-height:92%;overflow:auto;border-radius:20px 20px 0 0;padding:18px max(16px,env(safe-area-inset-left,0px)) calc(24px + env(safe-area-inset-bottom,0px));display:flex;flex-direction:column;gap:14px}
 .sheet .figbig{background:radial-gradient(circle at 50% 30%,#18315E,#0B1B3A);border-radius:14px;border:1px solid var(--line)}
@@ -260,7 +268,9 @@ body.is-home header.top{position:absolute;left:0;right:0;max-width:580px;margin:
 </div>
 <nav class="bottom" aria-label="Navigation principale"><div class="in" id="nav"></div></nav>
 <div id="sheet-root"></div>
+<div id="auth-root"></div>
 
+<script src="config.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 <script>
 "use strict";
@@ -968,6 +978,7 @@ function vProfile() {
       ${f("orsKey", "Clé cartographie (OpenRouteService)", "password", 'autocomplete="off" placeholder="Colle ta clé ici"', "Sert à calculer tes boucles. Elle reste sur cet appareil.")}
       <label class="f">Terrain préféré<select id="p-terrain">${[["foot-hiking", "Sentiers et chemins (trail)"], ["foot-walking", "Routes et trottoirs"]].map(([k, t]) => `<option value="${k}" ${(P.terrain || "foot-hiking") === k ? "selected" : ""}>${t}</option>`).join("")}</select></label></div>
     <button class="btn block" type="submit">Enregistrer et recalculer mon plan</button>
+    ${FB && FB.auth.currentUser ? `<div class="row between" style="gap:10px"><span class="small muted">Connecté : ${esc(FB.auth.currentUser.email || "")}</span><button class="btn ghost" type="button" data-act="logout" style="min-height:36px">Se déconnecter</button></div>` : ""}
     <p class="small muted">Tes données restent dans ton espace : elles ne sont visibles que par toi.</p>
   </form>`;
 }
@@ -1552,6 +1563,81 @@ async function icuSync(manual) {
     if (manual) toast(e.status === 401 || e.status === 403 ? "Clé intervals.icu refusée : vérifie-la dans ton profil." : inFrame() ? "Dans Claude, la synchro est bloquée : utilise le site sur ton téléphone." : "Synchro impossible (connexion ?).");
   } finally { ICU_SYNCING = false; render(); }
 }
+/* ============ Compte : inscription e-mail + mot de passe (Firebase, site uniquement) ============ */
+let FB = null, AUTH_MODE = "signup";
+const AUTH_ERR = { "auth/email-already-in-use": "Un compte existe déjà avec cet e-mail : connecte-toi.", "auth/invalid-email": "Adresse e-mail invalide.", "auth/weak-password": "Mot de passe trop court (6 caractères minimum).", "auth/invalid-credential": "E-mail ou mot de passe incorrect.", "auth/wrong-password": "E-mail ou mot de passe incorrect.", "auth/user-not-found": "Aucun compte avec cet e-mail.", "auth/too-many-requests": "Trop d'essais : réessaie dans quelques minutes.", "auth/network-request-failed": "Pas de connexion internet." };
+function loadScript(src) { return new Promise((ok, ko) => { const s = document.createElement("script"); s.src = src; s.onload = ok; s.onerror = ko; document.head.appendChild(s); }); }
+function authView(msg) {
+  const su = AUTH_MODE === "signup";
+  $("#auth-root").innerHTML = `<div class="auth" role="dialog" aria-modal="true" aria-label="Connexion"><form class="box" id="auth-form" novalidate>
+    <div class="logo">PLUS LOIN</div><p class="small muted" style="text-align:center;margin:-6px 0 4px">Ton coach running et trail</p>
+    <div class="tabs"><button type="button" data-auth="signup" class="${su ? "on" : ""}">Créer un compte</button><button type="button" data-auth="login" class="${su ? "" : "on"}">Se connecter</button></div>
+    ${su ? `<label class="f">Prénom<input id="a-prenom" type="text" autocomplete="given-name" required></label>` : ""}
+    <label class="f">E-mail<input id="a-mail" type="email" autocomplete="email" required></label>
+    <label class="f">Mot de passe<input id="a-pass" type="password" autocomplete="${su ? "new-password" : "current-password"}" minlength="6" required>${su ? '<span class="hint">6 caractères minimum</span>' : ""}</label>
+    <div class="err" id="a-err">${msg ? esc(msg) : ""}</div>
+    <button class="btn block" type="submit" id="a-go">${su ? "Créer mon compte" : "Me connecter"}</button>
+    ${su ? "" : '<button type="button" class="link" data-auth="reset">Mot de passe oublié ?</button>'}
+  </form></div>`;
+}
+function authLoading(t) { $("#auth-root").innerHTML = `<div class="auth"><div class="box" style="align-items:center"><div class="logo">PLUS LOIN</div><span class="spinner"></span><span class="small muted">${t}</span></div></div>`; }
+async function initAuth() {
+  const cfg = window.PL_FIREBASE;
+  if (!cfg || inFrame() || location.protocol === "file:") return;
+  authLoading("Chargement…");
+  try {
+    const v = "10.12.2";
+    await loadScript(`https://www.gstatic.com/firebasejs/${v}/firebase-app-compat.js`);
+    await Promise.all([loadScript(`https://www.gstatic.com/firebasejs/${v}/firebase-auth-compat.js`), loadScript(`https://www.gstatic.com/firebasejs/${v}/firebase-firestore-compat.js`)]);
+    firebase.initializeApp(cfg); FB = { auth: firebase.auth(), db: firebase.firestore() };
+    FB.auth.languageCode = "fr";
+  } catch (e) { $("#auth-root").innerHTML = ""; toast("Connexion au compte impossible : l'appli fonctionne en local."); return; }
+  FB.auth.onAuthStateChanged(async u => {
+    if (!u) { DOCREF = null; authView(); return; }
+    authLoading("Chargement de tes données…");
+    const ref = FB.db.doc(`users/${u.uid}`);
+    DOCREF = { set: d => ref.set(d) };
+    try {
+      const snap = await ref.get();
+      const st = snap.exists ? JSON.parse(snap.data().state || "null") : null;
+      if (st && st.v === 1) { S = st; if (!S.plan || S.plan.ver !== 3) S.plan = buildPlan(S.profile); store.set("plusloin.state", S); }
+      else {
+        if (S.profile.example || S.uid !== u.uid) { S = { profile: DEFAULT_PROFILE(), plan: null, logs: [EXAMPLE_LOG()], checkins: {}, overrides: {}, adapt: null, v: 1 }; S.plan = buildPlan(S.profile); }
+        if (UI.pendingPrenom) { S.profile.prenom = UI.pendingPrenom; UI.pendingPrenom = null; }
+      }
+      S.uid = u.uid; S.email = u.email; persist();
+    } catch (e) { toast("Données en ligne indisponibles : tes données restent sur ce téléphone."); }
+    $("#auth-root").innerHTML = ""; render();
+    if (S.profile.example) { toast("Bienvenue ! Commence par remplir ton profil."); go("profile"); }
+    icuSync(false); stravaSync(false);
+  });
+}
+async function authSubmit() {
+  const mail = $("#a-mail").value.trim(), pass = $("#a-pass").value; const err = $("#a-err"); const go_ = $("#a-go");
+  if (!mail || !pass) { err.textContent = "Renseigne ton e-mail et ton mot de passe."; return; }
+  go_.disabled = true; go_.innerHTML = `<span class="spinner"></span>`;
+  try {
+    if (AUTH_MODE === "signup") { UI.pendingPrenom = ($("#a-prenom")?.value || "").trim(); await FB.auth.createUserWithEmailAndPassword(mail, pass); }
+    else await FB.auth.signInWithEmailAndPassword(mail, pass);
+  } catch (e) { authView(AUTH_ERR[e.code] || "Erreur : " + (e.message || "réessaie.")); $("#a-mail").value = mail; }
+}
+async function authReset() {
+  const mail = ($("#a-mail")?.value || "").trim(); if (!mail) { $("#a-err").textContent = "Écris ton e-mail ci-dessus, puis appuie de nouveau sur « Mot de passe oublié »."; return; }
+  try { await FB.auth.sendPasswordResetEmail(mail); $("#a-err").textContent = "E-mail envoyé : suis le lien pour choisir un nouveau mot de passe."; }
+  catch (e) { $("#a-err").textContent = AUTH_ERR[e.code] || "Envoi impossible."; }
+}
+async function authLogout() {
+  if (!FB) return;
+  clearTimeout(saveTimer); if (DOCREF) await DOCREF.set({ state: JSON.stringify(S), updated: Date.now() }).catch(() => {});
+  try { localStorage.removeItem("plusloin.state"); } catch (e) {}
+  S = { profile: DEFAULT_PROFILE(), plan: null, logs: [EXAMPLE_LOG()], checkins: {}, overrides: {}, adapt: null, v: 1 }; S.plan = buildPlan(S.profile);
+  await FB.auth.signOut(); go("today");
+}
+document.addEventListener("click", e => {
+  const b = e.target.closest("[data-auth]"); if (!b) return;
+  if (b.dataset.auth === "reset") authReset(); else { AUTH_MODE = b.dataset.auth; authView(); }
+});
+document.addEventListener("submit", e => { if (e.target.id === "auth-form") { e.preventDefault(); authSubmit(); } });
 let SYNCING = false;
 async function stravaSync(manual) {
   if (SYNCING || !S.strava?.refresh) return;
@@ -1868,6 +1954,7 @@ document.addEventListener("click", e => {
   else if (a === "strava-connect") stravaConnect();
   else if (a === "strava-sync") stravaSync(true);
   else if (a === "icu-sync") icuSync(true);
+  else if (a === "logout") authLogout();
   else if (a === "strava-off") { S.strava = null; persist(); render(); toast("Strava déconnecté"); }
   else if (a === "route-again") { ROUTE.seed++; startRun(ROUTE.date, true); }
   else if (a === "route-gpx") shareGpx();
@@ -1918,6 +2005,7 @@ document.addEventListener("submit", e => {
 render();
 requestAnimationFrame(animLoop);
 connectAI();
+initAuth();
 stravaCallback().then(() => stravaSync(false));
 icuSync(false);
 document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") { stravaSync(false); icuSync(false); } });
