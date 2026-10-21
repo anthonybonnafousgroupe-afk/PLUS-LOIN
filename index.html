@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-<meta name="theme-color" content="#030B1C">
+<meta name="theme-color" content="#06080D">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
@@ -259,6 +259,69 @@ body.is-home header.top{position:absolute;left:0;right:0;max-width:580px;margin:
 </style>
 
 <canvas id="bg3d" aria-hidden="true"></canvas><div class="bgshade" aria-hidden="true"></div>
+<style id="theme-nuit">
+/* Thème « nuit » : fond noir uni, cartes sombres plates, titres mono en gras, accents rouge et vert. */
+:root{--bg:#06080D;--bg-2:#0B0D12;--surface:#15171C;--surface-2:#22252B;--glass:#15171C;
+  --ink:#F4F5F7;--ink-2:#A9ADB5;--ink-3:#6F747D;--line:rgba(255,255,255,.09);
+  --accent:#FF4848;--accent-2:#FF7A6B;--accent-ink:#fff;--accent-soft:rgba(255,72,72,.14);--glacier:#5AA9FF;--key:#7CF29A;
+  --f-display:"JetBrains Mono",ui-monospace,Menlo,monospace;--r:22px;--shadow:none}
+html,body{background:#06080D}
+body::before{background:#06080D}
+#bg3d,.bgshade{display:none!important}
+header.top,body.is-home header.top{background:rgba(6,8,13,.94);-webkit-backdrop-filter:none;backdrop-filter:none;position:sticky}
+.brand b{font-family:var(--f-body);font-weight:800;font-size:26px;letter-spacing:.04em}
+.brand small{color:var(--ink-3);letter-spacing:.06em}
+h1,h2,h3{font-family:var(--f-display);font-weight:700;letter-spacing:.01em}
+h1{text-transform:uppercase;letter-spacing:.03em;font-size:30px}
+h2{font-size:22px} h3{font-size:17px}
+.eyebrow{font-family:var(--f-mono);letter-spacing:.08em}
+.card,.home .card{background:var(--surface);-webkit-backdrop-filter:none;backdrop-filter:none;border:1px solid var(--line);box-shadow:none}
+.btn{background:var(--accent);box-shadow:none;color:#fff;border-radius:999px}
+.btn.secondary{background:var(--surface-2);color:var(--ink)}
+.btn.ghost{background:transparent;border:1px solid rgba(255,255,255,.16)}
+.iconbtn{background:#1A1C21;border:1px solid rgba(255,255,255,.14);height:40px}
+.tabs button,.seg button{background:#1A1C21;border-color:rgba(255,255,255,.12)}
+.tabs button[aria-pressed="true"],.seg button[aria-pressed="true"]{background:#2A2D33;color:var(--ink);border-color:rgba(255,255,255,.25)}
+.stat .v,.kpi .v,.score,.jcount,.day .d,.gauge span,.wx .temp,.logitem .sc{font-family:var(--f-mono);font-weight:700}
+.stat .v,.kpi .v{font-size:24px}
+.clock .t{font-family:var(--f-mono);font-weight:600;font-size:40px}
+.greet{font-family:var(--f-mono);font-weight:700;letter-spacing:.01em;font-size:clamp(28px,8vw,40px)}
+.greet .grad,.grad{background:none;-webkit-background-clip:initial;background-clip:initial;color:var(--accent)}
+.home{height:auto;min-height:0;margin-inline:0}
+.home .shade,.home .scene,.home .trail{display:none}
+.home .ov{padding:16px 0 calc(104px + env(safe-area-inset-bottom,0px));gap:18px;justify-content:flex-start}
+.home .greet{text-shadow:none}
+body.is-home main{padding-top:16px}
+.week{gap:4px}
+.day{background:transparent;border:1px solid transparent;border-radius:14px;padding:10px 2px}
+.day.sel{background:#1E2025;border-color:rgba(255,255,255,.12);box-shadow:none}
+.day.today .d{color:var(--accent)}
+.blocks{border-left-color:rgba(255,255,255,.12)}
+.why{background:#1C1E23}
+nav.bottom .in{background:#15171B;-webkit-backdrop-filter:none;backdrop-filter:none;border:1px solid rgba(255,255,255,.1);border-radius:999px;padding:5px;box-shadow:0 10px 30px rgba(0,0,0,.6)}
+nav.bottom button{border-radius:999px;color:var(--ink-2)}
+nav.bottom button[aria-current="page"]{background:#2A2D33;color:var(--ink)}
+nav.bottom button[aria-current="page"] svg{color:var(--ink);filter:none}
+label.f input,label.f select,label.f textarea{background:#1A1C21;border-color:rgba(255,255,255,.12)}
+.sheet{background:rgba(0,0,0,.6)}
+.sheet .panel{background:#101216}
+.ex{background:var(--surface)}
+.ex .figbox,.sheet .figbig{background:radial-gradient(circle at 50% 30%,#23262D,#121418)}
+.logitem,details.acc,.drop{background:#1A1C21}
+.auth{background:#06080D}
+.auth .box{background:#14161B;-webkit-backdrop-filter:none;backdrop-filter:none}
+.auth .logo{font-family:var(--f-body);font-weight:800;letter-spacing:.06em}
+.auth .tabs button.on{color:#fff}
+.pbar i{background:var(--key);box-shadow:none}
+.toast{background:#F4F5F7;color:#06080D}
+/* Carte de séance */
+.card.sess{position:relative;overflow:hidden}
+.card.sess>*{position:relative}
+.card.sess>.route{position:absolute;inset:0;width:100%;height:100%;pointer-events:none;opacity:.5}
+.card.key{border:1.5px solid var(--key)}
+.keytag{font-family:var(--f-mono);color:var(--key);font-weight:700;letter-spacing:.08em;font-size:12px}
+.when{font-family:var(--f-mono);color:var(--accent);font-weight:700;letter-spacing:.06em;font-size:13px;text-transform:uppercase}
+</style>
 <div class="app">
   <header class="top">
     <div class="brand"><div><b>PLUS LOIN</b><small>Coach running &amp; trail</small></div></div>
@@ -271,7 +334,6 @@ body.is-home header.top{position:absolute;left:0;right:0;max-width:580px;margin:
 <div id="auth-root"></div>
 
 <script src="config.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 <script>
 "use strict";
 /* ============ Utilitaires ============ */
@@ -754,6 +816,16 @@ function exampleBanner() {
   return `<div class="banner"><span><b>Profil d'exemple.</b> Le plan ci-dessous est calculé pour un coureur fictif. Entre tes données pour obtenir ton programme.</span><button class="btn" type="button" data-nav="profile" style="min-height:36px;padding:6px 12px">Créer mon profil</button></div>`;
 }
 function intensity(i) { return `<span class="int" aria-label="Intensité ${i} sur 5">${[1, 2, 3, 4, 5].map(k => `<i class="${k <= i ? "on" : ""}" style="height:${6 + k * 3}px"></i>`).join("")}</span>`; }
+// Tracé décoratif façon parcours, stable pour une date donnée
+function routeDeco(seed) {
+  let h = 0; for (const c of String(seed)) h = (h * 31 + c.charCodeAt(0)) >>> 0;
+  const rnd = () => { h = (h * 1664525 + 1013904223) >>> 0; return h / 4294967296; };
+  const pts = []; let x = 40 + rnd() * 80, y = -20;
+  for (let k = 0; k < 6; k++) { pts.push([x, y]); x = clamp(x + (rnd() - .4) * 260, 20, 380); y += 50 + rnd() * 50; }
+  const d = pts.map((p, i) => i ? `C${(pts[i - 1][0] + p[0]) / 2 + (rnd() - .5) * 120} ${pts[i - 1][1] + 30} ${p[0] + (rnd() - .5) * 90} ${p[1] - 30} ${p[0]} ${p[1]}` : `M${p[0]} ${p[1]}`).join(" ");
+  const x2 = 250 + rnd() * 120;
+  return `<svg class="route" viewBox="0 0 400 300" preserveAspectRatio="xMidYMid slice" aria-hidden="true"><path d="${d}" fill="none" stroke="#B0262C" stroke-width="3.2" stroke-linecap="round"/><path d="M${x2} -10 C${x2 - 60} 60 ${x2 + 40} 120 ${x2 - 30} 190 S ${x2 + 20} 280 ${x2 - 10} 320" fill="none" stroke="#8E1E24" stroke-width="2.4" stroke-linecap="round"/></svg>`;
+}
 function sessionCard(s, opts = {}) {
   if (!s) return `<div class="card"><p class="muted">Aucune séance prévue à cette date (hors plan).</p></div>`;
   const P = S.profile;
@@ -763,8 +835,11 @@ function sessionCard(s, opts = {}) {
     s.dplus ? `<div class="stat"><span class="v num">${s.dplus}<small>m</small></span><span class="l">D+</span></div>` : "",
     s.zone ? `<div class="stat"><span class="v" style="color:${ZCOL(s.zone)}">Z${s.zone}</span><span class="l">${zoneTxt(P, s.zone)}</span></div>` : ""].filter(Boolean);
   const ex = s.ex ? `<div class="stack"><div class="eyebrow">${s.ex === "stretch" ? "Routine d'étirements" : "Exercices du circuit"}</div><div class="exgrid">${CIRCUITS[s.ex].map(id => exTile(id, s.week)).join("")}</div></div>` : "";
-  return `<div class="card">
-    <div class="row between"><span class="eyebrow">${cap(fmtDate(s.date))} · Semaine ${s.week.i + 1} · ${s.week.phase}${s.week.rec ? " (allégée)" : ""}</span>${done ? '<span class="chip good">Réalisée</span>' : missed ? '<span class="chip">Non réalisée</span>' : ""}</div>
+  const key = s.i >= 3 || ["sl", "b2b", "course"].includes(s.type);
+  const when = s.date === TODAY ? "Aujourd'hui" : s.date === addDays(TODAY, 1) ? "Demain" : "";
+  return `<div class="card sess ${key ? "key" : ""}">${s.type !== "repos" ? routeDeco(s.date + s.type) : ""}
+    <div class="row between"><span class="eyebrow">${cap(fmtDate(s.date))} · Semaine ${s.week.i + 1} · ${s.week.phase}${s.week.rec ? " (allégée)" : ""}</span>${done ? '<span class="chip good">Réalisée</span>' : missed ? '<span class="chip">Non réalisée</span>' : key ? '<span class="keytag">SÉANCE CLÉ</span>' : ""}</div>
+    ${when ? `<span class="when" style="margin-bottom:-8px">${when}</span>` : ""}
     <div class="session-head"><div style="flex:1;min-width:0"><h1 style="font-size:${opts.small ? 26 : 34}px">${esc(s.title)}</h1></div>${s.i ? intensity(s.i) : ""}</div>
     ${s.note ? `<div class="banner" style="border-style:solid"><span><b>Adapté :</b> ${esc(s.note)}</span></div>` : ""}
     ${s.factor && s.factor !== 1 ? `<span class="chip mark">Volume ajusté × ${s.factor.toFixed(2)} par le coach</span>` : ""}
