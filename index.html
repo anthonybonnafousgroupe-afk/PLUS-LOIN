@@ -769,9 +769,43 @@ function recentTxt() {
 function aiError(e) {
   const c = e?.code;
   if (c === "not_granted") return "Accès à Claude refusé pour cette page. Tu peux l'autoriser depuis le menu Autorisations de l'artifact.";
+  if (c === "ai_off") return "Le coach IA n'est pas encore activé dans Firebase (AI Logic).";
   if (c === "rate_limited") return "Trop de demandes d'un coup. Réessaie dans une minute.";
   if (c === "images_unavailable" || c === "image_rejected") return "Cette image n'a pas pu être envoyée (format JPG, PNG ou WebP, taille raisonnable).";
   return "Le coach IA n'a pas répondu. Réessaie dans un instant.";
+}
+
+/* IA sur le site : Gemini via Firebase AI Logic (pas de clé à exposer, l'accès passe par le projet Firebase) */
+function geminiSample() {
+  const C = window.PL_FIREBASE; if (!C || !C.projectId) return null;
+  const url = t => `https://firebasevertexai.googleapis.com/v1beta/projects/${C.projectId}/models/${APP_CFG.aiModel || "gemini-2.5-flash"}:${t}`;
+  const hdr = { "Content-Type": "application/json", "x-goog-api-key": C.apiKey, "x-firebase-appid": C.appId || "" };
+  const b64 = blob => new Promise((ok, ko) => { const f = new FileReader(); f.onload = () => ok(String(f.result).split(",")[1]); f.onerror = ko; f.readAsDataURL(blob); });
+  const fail = async res => { let m = ""; try { m = (await res.json()).error?.message || ""; } catch (e) {} const err = new Error(m || "HTTP " + res.status); err.code = res.status === 429 ? "rate_limited" : /SERVICE_DISABLED|has not been used|disabled/i.test(m) ? "ai_off" : "ai_error"; throw err; };
+  const textOf = j => (j.candidates?.[0]?.content?.parts || []).map(x => x.text || "").join("");
+  async function gen(body, onText) {
+    if (!onText) { const res = await fetch(url("generateContent"), { method: "POST", headers: hdr, body: JSON.stringify(body) }); if (!res.ok) await fail(res); return textOf(await res.json()); }
+    const res = await fetch(url("streamGenerateContent") + "?alt=sse", { method: "POST", headers: hdr, body: JSON.stringify(body) }); if (!res.ok) await fail(res);
+    const rd = res.body.getReader(), dec = new TextDecoder(); let buf = "", out = "";
+    for (;;) { const { done, value } = await rd.read(); if (done) break; buf += dec.decode(value, { stream: true });
+      let i; while ((i = buf.indexOf("\n")) >= 0) { const line = buf.slice(0, i).trim(); buf = buf.slice(i + 1);
+        if (line.startsWith("data:")) { try { out += textOf(JSON.parse(line.slice(5))); onText({ text: out }); } catch (e) {} } } }
+    return out;
+  }
+  const fn = async (msgs, opts = {}) => gen({ contents: msgs.map(m => ({ role: m.role === "assistant" ? "model" : "user", parts: [{ text: m.content }] })) }, opts.onText);
+  fn.json = async (prompt, opts = {}) => {
+    const parts = [{ text: prompt }];
+    for (const im of opts.images || []) parts.push({ inlineData: { mimeType: im.type || "image/jpeg", data: await b64(im) } });
+    const t = await gen({ contents: [{ role: "user", parts }], generationConfig: { responseMimeType: "application/json" } });
+    try { return JSON.parse(t); } catch (e) { const m = t.match(/\{[\s\S]*\}/); if (m) return JSON.parse(m[0]); throw Object.assign(new Error("JSON"), { code: "ai_error" }); }
+  };
+  fn.limits = async () => ({ images: true });
+  fn.probe = async () => { const res = await fetch(url("countTokens"), { method: "POST", headers: hdr, body: JSON.stringify({ contents: [{ role: "user", parts: [{ text: "ok" }] }] }) }); return res.ok; };
+  return fn;
+}
+async function connectSiteAI() {
+  if (SAMPLE || window.claude?.use) return;
+  try { const g = geminiSample(); if (g && await g.probe()) { SAMPLE = g; SAMPLE_IMG = true; render(); } } catch (e) {}
 }
 
 /* ============ Rendu ============ */
@@ -1687,6 +1721,7 @@ async function initAuth() {
     } catch (e) { toast("Données en ligne indisponibles : tes données restent sur ce téléphone."); }
     await loadAppConfig();
     $("#auth-root").innerHTML = ""; render();
+    connectSiteAI();
     if (S.profile.example) { toast("Bienvenue ! Commence par remplir ton profil."); go("profile"); }
     icuSync(false); stravaSync(false);
   });
