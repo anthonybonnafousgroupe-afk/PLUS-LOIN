@@ -1811,14 +1811,37 @@ function wxAdvice(d) {
   if (d.wind >= 35) tips.push("Vent fort : pars face au vent pour l'avoir dans le dos au retour.");
   return tips.join(" ") || "Conditions correctes pour ta séance.";
 }
+/* Météo réelle : Open-Meteo, gratuit et sans clé. Ville du profil, sinon position GPS. */
+const WMO = c => c === 0 ? ["sun", "Ciel dégagé"] : c <= 2 ? ["cloud", "Éclaircies"] : c === 3 ? ["cloud", "Couvert"] : c <= 48 ? ["fog", "Brouillard"] : c <= 67 || (c >= 80 && c <= 82) ? ["rain", c >= 80 ? "Averses" : c <= 57 ? "Bruine" : "Pluie"] : c <= 77 || c === 85 || c === 86 ? ["snow", "Neige"] : ["storm", "Orage"];
+async function loadWeather(force) {
+  if (WX.status === "loading" || (!force && WX.status === "ok" && Date.now() - (WX.at || 0) < 20 * 60e3)) return;
+  const key = (S.profile.ville || "").trim().toLowerCase(); WX.status = "loading"; WX.key = key;
+  try {
+    let lat, lon, city = (S.profile.ville || "").trim();
+    if (city) {
+      const g = await (await fetch(`https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(city)}&count=1&language=fr`)).json();
+      const r = g.results && g.results[0]; if (r) { lat = r.latitude; lon = r.longitude; city = r.name; }
+    }
+    if (lat == null) {
+      const pos = await new Promise((ok, ko) => navigator.geolocation ? navigator.geolocation.getCurrentPosition(ok, ko, { timeout: 8000, maximumAge: 30 * 60e3 }) : ko());
+      lat = pos.coords.latitude; lon = pos.coords.longitude;
+    }
+    const w = await (await fetch(`https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current=temperature_2m,apparent_temperature,relative_humidity_2m,wind_speed_10m,weather_code,is_day&timezone=auto`)).json();
+    const c = w.current; if (!c) throw 0;
+    let [icon, desc] = WMO(c.weather_code); if (icon === "sun" && !c.is_day) icon = "night";
+    WX = { status: "ok", key, at: Date.now(), data: { temp: c.temperature_2m, feels: c.apparent_temperature, hum: c.relative_humidity_2m, wind: c.wind_speed_10m, icon, desc, city } };
+  } catch (e) { WX = { status: S.profile.ville ? "error" : "noloc", key, at: Date.now(), data: null }; }
+  if (UI.view === "today") render();
+}
 function weatherCard() {
   const P = S.profile;
+  if (WX.status !== "loading" && (WX.status === "off" || WX.key !== (P.ville || "").trim().toLowerCase() || Date.now() - (WX.at || 0) > 20 * 60e3)) setTimeout(() => loadWeather(true), 0);
   if (WX.status === "ok" && WX.data) {
     const d = WX.data;
     return `<div class="card wx"><div>${WX_ICONS[d.icon] || WX_ICONS.cloud}</div><div class="meta"><span class="temp num">${Math.round(d.temp)}<small>°C</small></span><b>${esc(d.desc || "")}</b></div><div class="side"><span>${esc(d.city || P.ville || "")}</span>${d.feels != null ? `<span>Ressenti ${Math.round(d.feels)}°</span>` : ""}${d.wind != null ? `<span>Vent ${Math.round(d.wind)} km/h</span>` : ""}${d.hum != null ? `<span>Humidité ${Math.round(d.hum)} %</span>` : ""}</div><div class="wx-tip"><span>🏃</span><span><b>Conseil du coach :</b> ${esc(wxAdvice(d))}</span></div></div>`;
   }
   const night = new Date().getHours() >= 19 || new Date().getHours() < 7;
-  return `<div class="card wx"><div style="opacity:.55">${night ? WX_ICONS.night : WX_ICONS.cloud}</div><div class="meta"><b>Météo ${P.ville ? "à " + esc(P.ville) : "locale"}</b><span class="small muted">${WX.status === "loading" ? "Chargement…" : WX.status === "error" ? "Météo indisponible pour le moment." : "Bientôt ici : température, vent et conseil de course selon la météo."}</span></div><div class="side"></div></div>`;
+  return `<div class="card wx"><div style="opacity:.55">${night ? WX_ICONS.night : WX_ICONS.cloud}</div><div class="meta"><b>Météo ${P.ville ? "à " + esc(P.ville) : "locale"}</b><span class="small muted">${WX.status === "loading" ? "Chargement…" : WX.status === "error" ? "Météo indisponible pour le moment." : WX.status === "noloc" ? "Ajoute ta ville dans ton profil (ou autorise la localisation) pour voir la météo." : "Chargement…"}</span></div><div class="side"></div></div>`;
 }
 function weekStats() {
   const w = weekOf(TODAY); if (!w) return null;
